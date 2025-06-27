@@ -29,11 +29,13 @@ final class StandardIO: ManagedProcess.IO & Sendable {
     private let stderrPipe: Pipe?
 
     @SendableProperty
-    private var stdinSocket: Socket?
-    @SendableProperty
-    private var stdoutSocket: Socket?
-    @SendableProperty
-    private var stderrSocket: Socket?
+    private var state: State
+    
+    private struct State {
+        var stdinSocket: Socket?
+        var stdoutSocket: Socket?
+        var stderrSocket: Socket?
+    }
 
     init(
         process: inout Command,
@@ -79,7 +81,7 @@ final class StandardIO: ManagedProcess.IO & Sendable {
             )
             let stdinSocket = try Socket(type: type, closeOnDeinit: false)
             try stdinSocket.connect()
-            self.stdinSocket = stdinSocket
+            state.stdinSocket = stdinSocket
 
             try relay(
                 readFromFd: stdinSocket.fileDescriptor,
@@ -95,7 +97,7 @@ final class StandardIO: ManagedProcess.IO & Sendable {
             // These fd's get closed when cleanupRelay is called
             let stdoutSocket = try Socket(type: type, closeOnDeinit: false)
             try stdoutSocket.connect()
-            self.stdoutSocket = stdoutSocket
+            state.stdoutSocket = stdoutSocket
 
             try relay(
                 readFromFd: self.stdoutPipe!.fileHandleForReading.fileDescriptor,
@@ -110,7 +112,7 @@ final class StandardIO: ManagedProcess.IO & Sendable {
             )
             let stderrSocket = try Socket(type: type, closeOnDeinit: false)
             try stderrSocket.connect()
-            self.stderrSocket = stderrSocket
+            state.stderrSocket = stderrSocket
 
             try relay(
                 readFromFd: self.stderrPipe!.fileHandleForReading.fileDescriptor,

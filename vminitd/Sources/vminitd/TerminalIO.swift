@@ -25,10 +25,14 @@ final class TerminalIO: ManagedProcess.IO & Sendable {
     private let log: Logger?
 
     private let stdio: HostStdio
+    
     @SendableProperty
-    private var stdinSocket: Socket?
-    @SendableProperty
-    private var stdoutSocket: Socket?
+    private var state: State
+    
+    private struct State {
+        var stdinSocket: Socket?
+        var stdoutSocket: Socket?
+    }
 
     init(
         process: inout Command,
@@ -66,7 +70,7 @@ final class TerminalIO: ManagedProcess.IO & Sendable {
             )
             let stdinSocket = try Socket(type: type, closeOnDeinit: false)
             try stdinSocket.connect()
-            self.stdinSocket = stdinSocket
+            state.stdinSocket = stdinSocket
 
             try relay(
                 readFromFd: stdinSocket.fileDescriptor,
@@ -81,7 +85,7 @@ final class TerminalIO: ManagedProcess.IO & Sendable {
             )
             let stdoutSocket = try Socket(type: type, closeOnDeinit: false)
             try stdoutSocket.connect()
-            self.stdoutSocket = stdoutSocket
+            state.stdoutSocket = stdoutSocket
 
             try relay(
                 readFromFd: self.parent.handle.fileDescriptor,
