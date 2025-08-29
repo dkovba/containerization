@@ -170,34 +170,29 @@ extension RegistryClient {
     public func fetchBlob(name: String, descriptor: Descriptor, into file: URL, progress: ProgressHandler?) async throws -> (Int64, SHA256Digest) {
         var hasher = SHA256()
         var received: Int64 = 0
-        let fs = NIOFileSystem.FileSystem.shared
-        let handle = try await fs.openFile(forWritingAt: FilePath(file.absolutePath()), options: .newFile(replaceExisting: true))
-        var writer = handle.bufferedWriter()
-        do {
-            try await self.fetchBlob(name: name, descriptor: descriptor) { (size, body) in
-                var itr = body.makeAsyncIterator()
-                while let buf = try await itr.next() {
-                    let readBytes = Int64(buf.readableBytes)
-                    received += readBytes
-                    let written = try await writer.write(contentsOf: buf)
-                    await progress?([
-                        ProgressEvent(event: "add-size", value: written)
-                    ])
-                    guard written == readBytes else {
-                        throw ContainerizationError(
-                            .internalError,
-                            message: "Could not write \(readBytes) bytes to file \(file)"
-                        )
-                    }
-                    hasher.update(data: buf.readableBytesView)
-                }
-            }
-            try await writer.flush()
-            try await handle.close()
-        } catch {
-            try? await handle.close()
-            throw error
+        
+        // Use Foundation FileHandle instead of NIOFileSystem to avoid SystemFileHandle leaks
+        guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
+            throw ContainerizationError(.internalError, message: "Cannot create file at path \(file.path)")
         }
+        
+        try await self.fetchBlob(name: name, descriptor: descriptor) { (size, body) in
+            let fd = try FileHandle(forWritingTo: file)
+            defer {
+                try? fd.close()
+            }
+            var itr = body.makeAsyncIterator()
+            while let buf = try await itr.next() {
+                let readBytes = Int64(buf.readableBytes)
+                received += readBytes
+                await progress?([
+                    ProgressEvent(event: "add-size", value: readBytes)
+                ])
+                try fd.write(contentsOf: buf.readableBytesView)
+                hasher.update(data: buf.readableBytesView)
+            }
+        }
+        
         let computedDigest = hasher.finalize()
         return (received, computedDigest)
     }
