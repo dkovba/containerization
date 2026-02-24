@@ -225,10 +225,6 @@ extension EXT4.EXT4Reader {
 
             while remaining > 0 && bytesWritten < desiredBytes {
                 let chunk = min(desiredBytes - bytesWritten, Int(min(remaining, UInt64(1 << 20))))
-                let dest = UnsafeMutableRawBufferPointer(
-                    start: base.advanced(by: bytesWritten),
-                    count: chunk
-                )
 
                 do {
                     guard let data = try self.handle.read(upToCount: chunk) else {
@@ -239,8 +235,13 @@ extension EXT4.EXT4Reader {
                         return bytesWritten
                     }
 
-                    // Copy the data to the destination buffer
+                    // Copy the data to the destination buffer, using the actual
+                    // number of bytes read (which may be less than chunk).
                     data.withUnsafeBytes { sourceBytes in
+                        let dest = UnsafeMutableRawBufferPointer(
+                            start: base.advanced(by: bytesWritten),
+                            count: sourceBytes.count
+                        )
                         dest.copyMemory(from: UnsafeRawBufferPointer(sourceBytes))
                     }
 

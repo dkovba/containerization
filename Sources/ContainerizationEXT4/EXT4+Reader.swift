@@ -211,7 +211,7 @@ extension EXT4 {
                 // When depth is 0 the extent header is followed by extent leaves
                 for _ in 0..<header.entries {
                     let leaf = inodeBlock.subdata(in: offset..<offset + extentLeafSize).withUnsafeBytes {
-                        $0.load(as: ExtentLeaf.self)
+                        $0.loadLittleEndian(as: ExtentLeaf.self)
                     }
                     extents.append((leaf.startLow, leaf.startLow + UInt32(leaf.length)))
                     offset += extentLeafSize
@@ -220,7 +220,7 @@ extension EXT4 {
                 // When depth is 1 the extent header is followed by extent indices which point to leaves
                 for _ in 0..<header.entries {
                     let indexNode = inodeBlock.subdata(in: offset..<offset + extentIndexSize).withUnsafeBytes {
-                        $0.load(as: ExtentIndex.self)
+                        $0.loadLittleEndian(as: ExtentIndex.self)
                     }
                     try self.seek(block: indexNode.leafLow)
                     guard let block = try self.handle.read(upToCount: Int(self.blockSize)) else {
@@ -250,6 +250,10 @@ extension EXT4 {
         }
 
         // MARK: Internal functions
+        func seek(block: UInt32) throws {
+            try self.handle.seek(toOffset: UInt64(block) * blockSize)
+        }
+
         func getInode(number: UInt32) throws -> Inode {
             if let inode = self.inodes[number] {
                 return inode

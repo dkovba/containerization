@@ -43,7 +43,9 @@ extension EXT4 {
                 return
             }
             if self.initialized {
-                self.underlying.deinitialize(count: self.capacity)
+                // Only deinitialize the single element that was previously initialized,
+                // not the full capacity.
+                self.underlying.deinitialize(count: 1)
             }
             self.underlying.initialize(to: value)
             self.allocated = true
@@ -78,7 +80,7 @@ extension EXT4 {
         }
 
         deinit {
-            self.deinitialize(count: self.capacity)
+            self.deinitialize(count: 1)
             self.deallocate()
         }
     }

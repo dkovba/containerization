@@ -86,14 +86,13 @@ extension EXT4.XAttrEntry {
         let rawSize = Array(bytes[8...11])
         valueSize = UInt32(littleEndian: rawSize.withUnsafeBytes { $0.load(as: UInt32.self) })
 
-        let rawHash = Array(bytes[12...])
+        let rawHash = Array(bytes[12...15])
         hash = UInt32(littleEndian: rawHash.withUnsafeBytes { $0.load(as: UInt32.self) })
     }
 }
 
 extension EXT4 {
     static func tupleToArray<T>(_ tuple: T) -> [UInt8] {
-        let reflection = Mirror(reflecting: tuple)
-        return reflection.children.compactMap { $0.value as? UInt8 }
+        withUnsafeBytes(of: tuple) { Array($0) }
     }
 }

@@ -71,11 +71,13 @@ extension EXT4.EXT4Reader {
             let pathStr = path.description
             entry.path = pathStr
             entry.size = Int64(size)
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            let fullGid = UInt32(inode.gidHigh) << 16 | UInt32(inode.gid)
+            let fullUid = UInt32(inode.uidHigh) << 16 | UInt32(inode.uid)
+            entry.group = gid_t(fullGid)
+            entry.owner = uid_t(fullUid)
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))
+            entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             entry.xattrs = xattrs
 
             if mode.isDir() {
@@ -130,7 +132,7 @@ extension EXT4.EXT4Reader {
                 entry.fileType = .symbolicLink
                 if size < 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
-                    entry.symlinkTarget = String(bytes: linkBytes, encoding: .utf8) ?? ""
+                    entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
                     if let block = item.blocks {
                         try self.seek(block: block.start)
@@ -154,11 +156,13 @@ extension EXT4.EXT4Reader {
             entry.path = path.description
             entry.hardlink = targetPath.description
             entry.permissions = inode.mode
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            let fullGid = UInt32(inode.gidHigh) << 16 | UInt32(inode.gid)
+            let fullUid = UInt32(inode.uidHigh) << 16 | UInt32(inode.uid)
+            entry.group = gid_t(fullGid)
+            entry.owner = uid_t(fullUid)
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))
+            entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             try writer.writeEntry(entry: entry, data: nil)
         }
         try writer.finishEncoding()
@@ -170,7 +174,7 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readInlineExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
@@ -183,16 +187,12 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readBlockExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
 
         return try EXT4.FileXattrsState.read(buffer: [UInt8](buffer), start: 32, offset: 0)
-    }
-
-    func seek(block: UInt32) throws {
-        try self.handle.seek(toOffset: UInt64(block) * blockSize)
     }
 }
 

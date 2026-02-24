@@ -18,7 +18,7 @@ import Foundation
 
 /*
  * Note: Both the entries and values for the attributes need to occupy a size that is a multiple of 4,
- * meaning, in cases where the attribute name or value is less than not a multiple of 4, it is padded with 0
+ * meaning, in cases where the attribute name or value is not a multiple of 4, it is padded with 0
  * until it reaches that size.
  */
 
@@ -43,7 +43,7 @@ extension EXT4 {
         }
 
         var sizeEntry: UInt32 {
-            UInt32((name.count + 3) & ~3 + 16)  // 16 bytes are needed to store other metadata for the xattr entry
+            UInt32(((name.count + 3) & ~3) + 16)  // 16 bytes are needed to store other metadata for the xattr entry
         }
 
         var size: UInt32 {
@@ -56,8 +56,8 @@ extension EXT4 {
 
         var hash: UInt32 {
             var hash: UInt32 = 0
-            for char in name {
-                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue!)
+            for char in name.utf8 {
+                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char)
             }
             var i = 0
             while i + 3 < value.count {
@@ -176,11 +176,14 @@ extension EXT4 {
                 idx += 1
             }
             var attributes = self.blockAttributes
-            attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
+            attributes.sort(by: { lhs, rhs in
+                if lhs.index != rhs.index {
+                    return lhs.index < rhs.index
                 }
-                return false
+                if lhs.name.count != rhs.name.count {
+                    return lhs.name.count < rhs.name.count
+                }
+                return lhs.name < rhs.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
@@ -254,29 +257,31 @@ extension EXT4 {
             var i = start
             var attribs: [ExtendedAttribute] = []
             // 16 is the size of 1 XAttrEntry
-            while i + 16 < buffer.count {
+            while i + 16 <= buffer.count {
                 let attributeStart = i
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
                 i += 16
                 var endIndex = i + Int(xattrEntry.nameLength)
-                guard endIndex < buffer.count else {
+                guard endIndex <= buffer.count else {
                     continue
                 }
                 let rawName = buffer[i..<endIndex]
-                let name = String(bytes: rawName, encoding: .ascii)!
+                guard let name = String(bytes: rawName, encoding: .ascii) else {
+                    continue
+                }
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
                 let value = [UInt8](buffer[valueStart..<valueEnd])
                 let xattr = ExtendedAttribute(idx: xattrEntry.nameIndex, compressedName: name, value: value)
                 attribs.append(xattr)
-                i = attributeStart + xattr.sizeEntry
+                i = attributeStart + Int(xattr.sizeEntry)
                 // The next 4 bytes being null indicate that there are no more attributes to read
-                endIndex = i + 3
-                guard endIndex < buffer.count else {
+                endIndex = i + 4
+                guard endIndex <= buffer.count else {
                     continue
                 }
-                if Array(buffer[i...i + 3]) == [0, 0, 0, 0] {
+                if Array(buffer[i..<i + 4]) == [0, 0, 0, 0] {
                     break
                 }
             }

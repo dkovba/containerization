@@ -595,16 +595,16 @@ extension EXT4 {
         //  The function performs any necessary final steps to ensure the integrity and consistency
         //  of the ext4 filesystem before it can be mounted and used.
         public func close() throws {
-            var breathWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
+            var breadthWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
                 (nil, self.tree.root)
             ]
-            while !breathWiseChildTree.isEmpty {
-                let (parent, child) = breathWiseChildTree.removeFirst()
+            while !breadthWiseChildTree.isEmpty {
+                let (parent, child) = breadthWiseChildTree.removeFirst()
                 try self.commit(parent, child)  // commit directories iteratively
                 if child.pointee.link != nil {
                     continue
                 }
-                breathWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
+                breadthWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
             }
             let blockGroupSize = optimizeBlockGroupLayout(blocks: self.currentBlock, inodes: UInt32(self.inodes.count))
             let inodeTableOffset = try self.commitInodeTable(
@@ -952,7 +952,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt64(UInt32(self.inodes.count) * EXT4.InodeSize)
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1326,8 +1326,11 @@ extension Date {
             return 0x3_7fff_ffff
         }
 
-        let seconds = UInt64(s)
-        let nanoseconds = UInt64(self.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
+        // For negative timestamps (dates before 1970), use bitPattern to avoid
+        // trapping on the UInt64 conversion.
+        let seconds = UInt64(bitPattern: Int64(s))
+        let fractional = abs(s.truncatingRemainder(dividingBy: 1))
+        let nanoseconds = UInt64(fractional * 1_000_000_000)
 
         return seconds | (nanoseconds << 34)
     }

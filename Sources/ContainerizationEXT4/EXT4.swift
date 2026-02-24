@@ -113,7 +113,7 @@ import Foundation
 
  ### Inode Bitmap
 
- A sequence of bits, where each bit represents a inode in the block group. Since
+ A sequence of bits, where each bit represents an inode in the block group. Since
  inodes per group is a fixed number, this bitmap is made to be of sufficient length
  to accommodate that many inodes
 
@@ -210,7 +210,7 @@ import Foundation
 
  ## Directory entries
 
- The data blocks for directory inodes point to a list of directory entrees. Each entry
+ The data blocks for directory inodes point to a list of directory entries. Each entry
  consists of only a name and inode number. The name and inode number correspond to the
  name and inode number of the children of the directory
 
@@ -287,7 +287,7 @@ public enum EXT4 {
     static let InodeSize: UInt32 = UInt32(MemoryLayout<Inode>.size)  // 256 bytes. This is the max size of an inode
     static let XattrInodeHeaderSize: UInt32 = 4
     static let XattrBlockHeaderSize: UInt32 = 32
-    static let ExtraIsize: UInt16 = UInt16(InodeActualSize) - 128
+    static let ExtraIsize: UInt16 = UInt16(InodeActualSize - 128)
 
     static let MaxLinks: UInt32 = 65000
     static let MaxBlocksPerExtent: UInt32 = 0x8000
