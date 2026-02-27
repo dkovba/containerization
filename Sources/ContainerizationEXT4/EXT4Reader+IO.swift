@@ -356,6 +356,7 @@ extension EXT4.EXT4Reader {
                     // Absolute symlink: reset to root
                     current = EXT4.RootInode
                     parentStack = []
+                    visitedInodes = []
                     // Replace the symlink component with target components + remaining path
                     components = targetComponents + Array(components[(componentIndex + 1)...])
                     componentIndex = 0  // Start from beginning with new path

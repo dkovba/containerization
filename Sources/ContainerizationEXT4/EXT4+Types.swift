@@ -465,6 +465,7 @@ extension EXT4 {
         static let topDir = InodeFlag(rawValue: 0x20000)
         static let hugeFile = InodeFlag(rawValue: 0x40000)
         static let extents = InodeFlag(rawValue: 0x80000)
+        static let verity = InodeFlag(rawValue: 0x100000)
         static let eaInode = InodeFlag(rawValue: 0x200000)
         static let eofBlocks = InodeFlag(rawValue: 0x400000)
         static let snapfile = InodeFlag(rawValue: 0x0100_0000)
@@ -472,6 +473,7 @@ extension EXT4 {
         static let snapfileShrunk = InodeFlag(rawValue: 0x0800_0000)
         static let inlineData = InodeFlag(rawValue: 0x1000_0000)
         static let projectIDInherit = InodeFlag(rawValue: 0x2000_0000)
+        static let casefold = InodeFlag(rawValue: 0x4000_0000)
         static let reserved = InodeFlag(rawValue: 0x8000_0000)
     }
 
@@ -590,7 +592,7 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        let reserved: (UInt32, UInt32, UInt32)
     }
 
 }

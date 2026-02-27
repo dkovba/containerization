@@ -56,7 +56,8 @@ extension UnsafeRawBufferPointer {
         case .little:
             return self.load(as: T.self)
         case .big:
-            let buffer = Array(self.reversed())
+            let size = MemoryLayout<T>.size
+            let buffer = Array(self.prefix(size).reversed())
             return buffer.withUnsafeBytes { ptr in
                 ptr.load(as: T.self)
             }

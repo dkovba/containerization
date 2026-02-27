@@ -46,7 +46,6 @@ extension EXT4 {
                 self.underlying.deinitialize(count: self.capacity)
             }
             self.underlying.initialize(to: value)
-            self.allocated = true
             self.initialized = true
         }
 
@@ -54,9 +53,12 @@ extension EXT4 {
             guard self.allocated else {
                 return
             }
+            if self.initialized {
+                self.underlying.deinitialize(count: self.capacity)
+                self.initialized = false
+            }
             self.underlying.deallocate()
             self.allocated = false
-            self.initialized = false
         }
 
         func deinitialize(count: Int) {
@@ -68,12 +70,13 @@ extension EXT4 {
             }
             self.underlying.deinitialize(count: count)
             self.initialized = false
-            self.allocated = true
         }
 
         func move() -> T {
+            guard self.allocated && self.initialized else {
+                fatalError("move() called on an uninitialized or deallocated Ptr")
+            }
             self.initialized = false
-            self.allocated = true
             return self.underlying.move()
         }
 
