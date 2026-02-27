@@ -173,15 +173,24 @@ extension EXT4 {
             var offset = 0
             while offset < dirTree.count {
                 let length = MemoryLayout<DirectoryEntry>.size
+                guard offset + length <= dirTree.count else {
+                    break
+                }
                 let dirEntry = dirTree.subdata(in: offset..<offset + length).withUnsafeBytes {
                     $0.loadLittleEndian(as: DirectoryEntry.self)
                 }
-                if dirEntry.inode == 0 {
+                if dirEntry.recordLength == 0 {
                     break
                 }
-                let nameData = dirTree.subdata(in: offset + 8..<offset + 8 + Int(dirEntry.nameLength))
-                let name = String(data: nameData, encoding: .utf8) ?? ""
-                children.append((name, dirEntry.inode))
+                if dirEntry.inode != 0 {
+                    let nameEnd = offset + 8 + Int(dirEntry.nameLength)
+                    guard nameEnd <= dirTree.count else {
+                        break
+                    }
+                    let nameData = dirTree.subdata(in: offset + 8..<nameEnd)
+                    let name = String(data: nameData, encoding: .utf8) ?? ""
+                    children.append((name, dirEntry.inode))
+                }
                 offset += Int(dirEntry.recordLength)
             }
             return children.sorted { a, b in
@@ -211,7 +220,7 @@ extension EXT4 {
                 // When depth is 0 the extent header is followed by extent leaves
                 for _ in 0..<header.entries {
                     let leaf = inodeBlock.subdata(in: offset..<offset + extentLeafSize).withUnsafeBytes {
-                        $0.load(as: ExtentLeaf.self)
+                        $0.loadLittleEndian(as: ExtentLeaf.self)
                     }
                     extents.append((leaf.startLow, leaf.startLow + UInt32(leaf.length)))
                     offset += extentLeafSize
@@ -220,7 +229,7 @@ extension EXT4 {
                 // When depth is 1 the extent header is followed by extent indices which point to leaves
                 for _ in 0..<header.entries {
                     let indexNode = inodeBlock.subdata(in: offset..<offset + extentIndexSize).withUnsafeBytes {
-                        $0.load(as: ExtentIndex.self)
+                        $0.loadLittleEndian(as: ExtentIndex.self)
                     }
                     try self.seek(block: indexNode.leafLow)
                     guard let block = try self.handle.read(upToCount: Int(self.blockSize)) else {

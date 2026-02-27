@@ -241,7 +241,7 @@ extension EXT4 {
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            guard pathNode.inode > FirstInode else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -1135,7 +1135,7 @@ extension EXT4 {
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
@@ -1324,6 +1324,11 @@ extension Date {
 
         if s > 0x3_7fff_ffff {
             return 0x3_7fff_ffff
+        }
+
+        if s < 0 {
+            let seconds = UInt64(bitPattern: Int64(s))
+            return seconds & 0x3_FFFF_FFFF
         }
 
         let seconds = UInt64(s)

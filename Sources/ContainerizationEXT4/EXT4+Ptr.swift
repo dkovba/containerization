@@ -43,7 +43,7 @@ extension EXT4 {
                 return
             }
             if self.initialized {
-                self.underlying.deinitialize(count: self.capacity)
+                self.underlying.deinitialize(count: 1)
             }
             self.underlying.initialize(to: value)
             self.allocated = true

@@ -540,9 +540,9 @@ extension EXT4 {
 
     struct DirectoryTreeRoot {
         let dot: DirectoryEntry
-        let dotName: [UInt8]
+        let dotName: (UInt8, UInt8, UInt8, UInt8)
         let dotDot: DirectoryEntry
-        let dotDotName: [UInt8]
+        let dotDotName: (UInt8, UInt8, UInt8, UInt8)
         let reservedZero: UInt32
         let hashVersion: UInt8
         let infoLength: UInt8
@@ -590,7 +590,7 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        let reserved: (UInt32, UInt32, UInt32)
     }
 
 }

@@ -43,7 +43,7 @@ extension EXT4 {
         }
 
         var sizeEntry: UInt32 {
-            UInt32((name.count + 3) & ~3 + 16)  // 16 bytes are needed to store other metadata for the xattr entry
+            UInt32(((name.count + 3) & ~3) + 16)  // 16 bytes are needed to store other metadata for the xattr entry
         }
 
         var size: UInt32 {
@@ -177,10 +177,13 @@ extension EXT4 {
             }
             var attributes = self.blockAttributes
             attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
+                if $0.index != $1.index {
+                    return $0.index < $1.index
                 }
-                return false
+                if $0.name.count != $1.name.count {
+                    return $0.name.count < $1.name.count
+                }
+                return $0.name < $1.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
@@ -254,19 +257,24 @@ extension EXT4 {
             var i = start
             var attribs: [ExtendedAttribute] = []
             // 16 is the size of 1 XAttrEntry
-            while i + 16 < buffer.count {
+            while i + 16 <= buffer.count {
                 let attributeStart = i
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
                 i += 16
                 var endIndex = i + Int(xattrEntry.nameLength)
-                guard endIndex < buffer.count else {
-                    continue
+                guard endIndex <= buffer.count else {
+                    break
                 }
                 let rawName = buffer[i..<endIndex]
-                let name = String(bytes: rawName, encoding: .ascii)!
+                guard let name = String(bytes: rawName, encoding: .ascii) else {
+                    break
+                }
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
+                guard valueEnd <= buffer.count else {
+                    break
+                }
                 let value = [UInt8](buffer[valueStart..<valueEnd])
                 let xattr = ExtendedAttribute(idx: xattrEntry.nameIndex, compressedName: name, value: value)
                 attribs.append(xattr)

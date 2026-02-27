@@ -54,19 +54,14 @@ extension FilePath {
     }
 
     public init?(_ data: Data) {
-        let cstr: String? = data.withUnsafeBytes { (rbp: UnsafeRawBufferPointer) in
-            guard let baseAddress = rbp.baseAddress else {
-                return nil
-            }
-
-            let cString = baseAddress.bindMemory(to: CChar.self, capacity: data.count)
-            return String(cString: cString)
-        }
-
-        guard let cstr else {
+        let length = data.firstIndex(of: 0) ?? data.count
+        guard length > 0 else {
             return nil
         }
-        self.init(cstr)
+        guard let str = String(bytes: data[data.startIndex..<data.startIndex + length], encoding: .utf8) else {
+            return nil
+        }
+        self.init(str)
     }
 
     public func join(_ path: FilePath) -> FilePath {
