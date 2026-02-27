@@ -241,7 +241,7 @@ extension EXT4 {
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            guard inodeNumber >= Int(EXT4.FirstInode) - 1 else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -627,7 +627,7 @@ extension EXT4 {
             if diskSize < minimumDiskSize {  // for data + metadata
                 diskSize = minimumDiskSize
             }
-            if self.size < minimumDiskSize {
+            if self.size < UInt64(minimumDiskSize) * UInt64(self.blockSize) {
                 self.size = UInt64(minimumDiskSize) * self.blockSize
             }
             // number of blocks needed for group descriptors
@@ -699,9 +699,11 @@ extension EXT4 {
                     for i in 0...usedGroupDescriptorBlocks {
                         bitmap[Int(i / 8)] |= 1 << (i % 8)
                     }
-                    for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
-                        bitmap[Int(i / 8)] &= ~(1 << (i % 8))
-                        blocks -= 1
+                    if usedGroupDescriptorBlocks < self.groupDescriptorBlocks {
+                        for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
+                            bitmap[Int(i / 8)] &= ~(1 << (i % 8))
+                            blocks -= 1
+                        }
                     }
                 }
 
@@ -730,7 +732,7 @@ extension EXT4 {
                 // inodes bitmap goes into second bitmap block
                 for i in 0..<blockGroupSize.inodesPerGroup {
                     let ino = InodeNumber(1 + group * blockGroupSize.inodesPerGroup + i)
-                    if ino > self.inodes.count {
+                    if Int(ino) > self.inodes.count {
                         continue
                     }
                     let inode = self.inodes[Int(ino) - 1]
@@ -805,7 +807,7 @@ extension EXT4 {
             }
             for group in blockGroupSize.blockGroups..<totalGroups.lo {
                 var blocksInGroup = UInt32(self.blocksPerGroup)
-                if group == totalGroups.lo {
+                if group == totalGroups.lo - 1 {
                     if UInt64(self.size / UInt64(self.blockSize)) < self.blocksPerGroup {
                         break
                     }
@@ -838,7 +840,7 @@ extension EXT4 {
                 totalBlocks += (inodeTableSizePerGroup + 2)
                 try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
 
-                if group == totalGroups.lo {
+                if group == totalGroups.lo - 1 {
                     var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
                     for i in blocksInGroup..<UInt32(self.blocksPerGroup) {
                         blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
@@ -868,7 +870,7 @@ extension EXT4 {
 
             let computedInodes = totalGroups * blockGroupSize.inodesPerGroup
             var blocksCount = totalGroups * self.blocksPerGroup
-            while blocksCount < totalBlocks {
+            if blocksCount < UInt64(totalBlocks) {
                 blocksCount = UInt64(totalBlocks)
             }
             let totalFreeBlocks: UInt64
@@ -886,8 +888,9 @@ extension EXT4 {
             let freeInodesCount = computedInodes.lo - totalInodes
             superblock.freeInodesCount = freeInodesCount
             superblock.firstDataBlock = 0
-            superblock.logBlockSize = 2
-            superblock.logClusterSize = 2
+            let logBlockSize = UInt32((self.blockSize / 1024).trailingZeroBitCount)
+            superblock.logBlockSize = logBlockSize
+            superblock.logClusterSize = logBlockSize
             superblock.blocksPerGroup = self.blocksPerGroup
             superblock.clustersPerGroup = self.blocksPerGroup
             superblock.inodesPerGroup = blockGroupSize.inodesPerGroup
@@ -952,7 +955,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt32(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1135,7 +1138,7 @@ extension EXT4 {
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
