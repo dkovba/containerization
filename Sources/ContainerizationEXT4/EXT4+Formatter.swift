@@ -1318,8 +1318,8 @@ extension Date {
 
         let s = self.timeIntervalSince1970
 
-        if s < -0x8000_0000 {
-            return 0x8000_0000
+        if s < 0 {
+            return 0
         }
 
         if s > 0x3_7fff_ffff {

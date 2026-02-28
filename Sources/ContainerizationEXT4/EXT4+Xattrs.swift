@@ -176,11 +176,14 @@ extension EXT4 {
                 idx += 1
             }
             var attributes = self.blockAttributes
-            attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
+            attributes.sort(by: { a, b in
+                if a.index != b.index {
+                    return a.index < b.index
                 }
-                return false
+                if a.name.count != b.name.count {
+                    return a.name.count < b.name.count
+                }
+                return a.name < b.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
@@ -260,7 +263,7 @@ extension EXT4 {
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
                 i += 16
                 var endIndex = i + Int(xattrEntry.nameLength)
-                guard endIndex < buffer.count else {
+                guard endIndex <= buffer.count else {
                     continue
                 }
                 let rawName = buffer[i..<endIndex]
