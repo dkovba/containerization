@@ -241,7 +241,7 @@ extension EXT4 {
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            guard Int(pathNode.inode) > Int(EXT4.FirstInode) else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -771,7 +771,6 @@ extension EXT4 {
                 let blockBitmap = UInt64(bitmapOffset + 2 * group)
                 let inodeBitmap = UInt64(bitmapOffset + 2 * group + 1)
                 let inodeTable = inodeTableOffset + UInt64(group * inodeTableSizePerGroup)
-                let freeBlocksCount = UInt32(self.blocksPerGroup - blocks)
                 let freeInodesCount = UInt32(blockGroupSize.inodesPerGroup - inodes)
                 groupDescriptors.append(
                     // low bits
@@ -779,7 +778,7 @@ extension EXT4 {
                         blockBitmapLow: blockBitmap.lo,  // address of block bitmap
                         inodeBitmapLow: inodeBitmap.lo,  // address of inode bitmap
                         inodeTableLow: inodeTable.lo,  // address of inode table for this group
-                        freeBlocksCountLow: freeBlocksCount.lo,
+                        freeBlocksCountLow: freeBlocks.lo,
                         freeInodesCountLow: freeInodesCount.lo,
                         usedDirsCountLow: dirs.lo,
                         flags: 0x0000,
@@ -805,7 +804,7 @@ extension EXT4 {
             }
             for group in blockGroupSize.blockGroups..<totalGroups.lo {
                 var blocksInGroup = UInt32(self.blocksPerGroup)
-                if group == totalGroups.lo {
+                if group == totalGroups.lo - 1 {
                     if UInt64(self.size / UInt64(self.blockSize)) < self.blocksPerGroup {
                         break
                     }
@@ -838,7 +837,7 @@ extension EXT4 {
                 totalBlocks += (inodeTableSizePerGroup + 2)
                 try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
 
-                if group == totalGroups.lo {
+                if group == totalGroups.lo - 1 {
                     var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
                     for i in blocksInGroup..<UInt32(self.blocksPerGroup) {
                         blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
@@ -868,11 +867,11 @@ extension EXT4 {
 
             let computedInodes = totalGroups * blockGroupSize.inodesPerGroup
             var blocksCount = totalGroups * self.blocksPerGroup
-            while blocksCount < totalBlocks {
+            while blocksCount < UInt64(totalBlocks) {
                 blocksCount = UInt64(totalBlocks)
             }
             let totalFreeBlocks: UInt64
-            if totalBlocks > blocksCount {
+            if UInt64(totalBlocks) > blocksCount {
                 totalFreeBlocks = 0
             } else {
                 totalFreeBlocks = blocksCount - totalBlocks
@@ -952,7 +951,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt32(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1101,7 +1100,7 @@ extension EXT4 {
                     }
                 }
             case 5..<4 * UInt32(extentsPerBlock) + 1:
-                let extentBlocks = numExtents / extentsPerBlock + 1
+                let extentBlocks = (numExtents + extentsPerBlock - 1) / extentsPerBlock
                 usedBlocks += extentBlocks
                 let extentHeader = ExtentHeader(
                     magic: EXT4.ExtentHeaderMagic,
@@ -1135,7 +1134,7 @@ extension EXT4 {
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
@@ -1232,6 +1231,11 @@ extension EXT4 {
             if left <= 0 {
                 return
             }
+            let directoryEntrySize = MemoryLayout<DirectoryEntry>.size
+            guard left >= directoryEntrySize else {
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: left))
+                return
+            }
             let entry = DirectoryEntry(
                 inode: InodeNumber(0),
                 recordLength: UInt16(left),
@@ -1241,7 +1245,7 @@ extension EXT4 {
             try withUnsafeLittleEndianBytes(of: entry) { bytes in
                 try self.handle.write(contentsOf: bytes)
             }
-            left = left - MemoryLayout<DirectoryEntry>.size
+            left = left - directoryEntrySize
             if left < 4 {
                 throw Error.noSpaceForTrailingDEntry
             }

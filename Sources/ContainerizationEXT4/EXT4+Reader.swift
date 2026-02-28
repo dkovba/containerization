@@ -119,6 +119,10 @@ extension EXT4 {
             try? self.handle.close()
         }
 
+        func seek(block: UInt32) throws {
+            try self.handle.seek(toOffset: UInt64(block) * blockSize)
+        }
+
         private func readGroupDescriptor(_ number: UInt32) throws -> GroupDescriptor {
             let bs = UInt64(1024 * (1 << _superBlock.logBlockSize))
             let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)
