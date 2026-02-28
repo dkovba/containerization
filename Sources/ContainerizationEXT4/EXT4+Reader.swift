@@ -68,11 +68,8 @@ extension EXT4 {
             var items: [(item: Ptr<EXT4.FileTree.FileTreeNode>, inode: InodeNumber)] = [
                 (self.tree.root, EXT4.RootInode)
             ]
-            while items.count > 0 {
-                guard let item = items.popLast() else {
-                    break
-                }
-                let (itemPtr, inodeNum) = item
+            while !items.isEmpty {
+                let (itemPtr, inodeNum) = items.removeLast()
                 let childItems = try self.children(of: inodeNum)
                 let root = itemPtr.pointee
                 for (itemName, itemInodeNum) in childItems {
@@ -120,8 +117,8 @@ extension EXT4 {
         }
 
         private func readGroupDescriptor(_ number: UInt32) throws -> GroupDescriptor {
-            let bs = UInt64(1024 * (1 << _superBlock.logBlockSize))
-            let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)
+            let gdtOffset = (UInt64(_superBlock.firstDataBlock) + 1) * blockSize
+            let offset = gdtOffset + UInt64(number) * UInt64(self.groupDescriptorSize)
             try self.handle.seek(toOffset: offset)
             guard let data = try? self.handle.read(upToCount: MemoryLayout<EXT4.GroupDescriptor>.size) else {
                 throw EXT4.Error.couldNotReadGroup(number)
@@ -171,15 +168,19 @@ extension EXT4 {
         private func getDirEntries(dirTree: Data) throws -> [(String, InodeNumber)] {
             var children: [(String, InodeNumber)] = []
             var offset = 0
+            let entryHeaderSize = MemoryLayout<DirectoryEntry>.size
             while offset < dirTree.count {
-                let length = MemoryLayout<DirectoryEntry>.size
-                let dirEntry = dirTree.subdata(in: offset..<offset + length).withUnsafeBytes {
+                let dirEntry = dirTree.subdata(in: offset..<offset + entryHeaderSize).withUnsafeBytes {
                     $0.loadLittleEndian(as: DirectoryEntry.self)
                 }
-                if dirEntry.inode == 0 {
+                if dirEntry.recordLength == 0 {
                     break
                 }
-                let nameData = dirTree.subdata(in: offset + 8..<offset + 8 + Int(dirEntry.nameLength))
+                if dirEntry.inode == 0 {
+                    offset += Int(dirEntry.recordLength)
+                    continue
+                }
+                let nameData = dirTree.subdata(in: offset + entryHeaderSize..<offset + entryHeaderSize + Int(dirEntry.nameLength))
                 let name = String(data: nameData, encoding: .utf8) ?? ""
                 children.append((name, dirEntry.inode))
                 offset += Int(dirEntry.recordLength)
@@ -211,7 +212,7 @@ extension EXT4 {
                 // When depth is 0 the extent header is followed by extent leaves
                 for _ in 0..<header.entries {
                     let leaf = inodeBlock.subdata(in: offset..<offset + extentLeafSize).withUnsafeBytes {
-                        $0.load(as: ExtentLeaf.self)
+                        $0.loadLittleEndian(as: ExtentLeaf.self)
                     }
                     extents.append((leaf.startLow, leaf.startLow + UInt32(leaf.length)))
                     offset += extentLeafSize
@@ -220,14 +221,14 @@ extension EXT4 {
                 // When depth is 1 the extent header is followed by extent indices which point to leaves
                 for _ in 0..<header.entries {
                     let indexNode = inodeBlock.subdata(in: offset..<offset + extentIndexSize).withUnsafeBytes {
-                        $0.load(as: ExtentIndex.self)
+                        $0.loadLittleEndian(as: ExtentIndex.self)
                     }
                     try self.seek(block: indexNode.leafLow)
                     guard let block = try self.handle.read(upToCount: Int(self.blockSize)) else {
                         throw EXT4.Error.couldNotReadBlock(indexNode.leafLow)
                     }
                     var blockOffset = 0
-                    let leafHeader = block.subdata(in: blockOffset..<extentHeaderSize).withUnsafeBytes {
+                    let leafHeader = block.subdata(in: blockOffset..<blockOffset + extentHeaderSize).withUnsafeBytes {
                         $0.loadLittleEndian(as: ExtentHeader.self)
                     }
                     guard leafHeader.magic == EXT4.ExtentHeaderMagic else {

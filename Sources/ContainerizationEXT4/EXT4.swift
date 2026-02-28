@@ -15,7 +15,6 @@
 //===----------------------------------------------------------------------===//
 
 import ContainerizationOS
-import Foundation
 
 /**
  ```
@@ -29,7 +28,7 @@ import Foundation
     +--------------------------+
     |    Superblock (1024)     |
     +--------------------------+
-    |      Empty (2048)        |
+    |      Padding (2048)      |
     +--------------------------+
     |                          |
     | [Block Group Descriptors]|
@@ -210,7 +209,7 @@ import Foundation
 
  ## Directory entries
 
- The data blocks for directory inodes point to a list of directory entrees. Each entry
+ The data blocks for directory inodes point to a list of directory entries. Each entry
  consists of only a name and inode number. The name and inode number correspond to the
  name and inode number of the children of the directory
 

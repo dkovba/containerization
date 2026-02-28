@@ -14,7 +14,6 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
 import SystemPackage
 
 extension EXT4 {
@@ -47,7 +46,6 @@ extension EXT4 {
             }
 
             deinit {
-                self.children.removeAll()
                 self.children = []
                 self.blocks = nil
                 self.additionalBlocks = nil
@@ -56,26 +54,23 @@ extension EXT4 {
 
             var path: FilePath? {
                 var components: [String] = [self.name]
-                var _ptr = self.parent
-                while let ptr = _ptr {
+                var current = self.parent
+                while let ptr = current {
                     components.append(ptr.pointee.name)
-                    _ptr = ptr.pointee.parent
+                    current = ptr.pointee.parent
                 }
-                guard let last = components.last else {
+                guard let rootName = components.last else {
                     return nil
                 }
-                guard components.count > 1 else {
-                    return FilePath(last)
+                let pathComponents = Array(components.dropLast().reversed())
+                if pathComponents.isEmpty {
+                    return FilePath(rootName)
                 }
-                components = components.dropLast()
-                let path = components.reversed().joined(separator: "/")
-                guard let data = path.data(using: .utf8) else {
-                    return nil
+                let joined = pathComponents.joined(separator: "/")
+                if rootName == "/" {
+                    return FilePath("/" + joined).lexicallyNormalized()
                 }
-                guard let dataPath = String(data: data, encoding: .utf8) else {
-                    return nil
-                }
-                return FilePath(dataPath).pushing(FilePath(last)).lexicallyNormalized()
+                return FilePath(joined).lexicallyNormalized()
             }
         }
 

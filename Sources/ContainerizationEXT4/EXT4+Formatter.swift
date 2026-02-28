@@ -235,14 +235,13 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                if linkedInode.linksCount > 1 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
             }
 
-            guard inodeNumber > FirstInode else {
-                // Free the inodes and the blocks related to the inode only if its valid
+            guard pathNode.inode >= EXT4.FirstInode else {
                 return
             }
             if let blocks = pathNode.blocks {
@@ -694,14 +693,15 @@ extension EXT4 {
 
                 if group == 0 {  // unused group descriptor blocks
                     // blocks used by group descriptors
-
                     let usedGroupDescriptorBlocks = (totalGroups - 1) / self.groupsPerDescriptorBlock + 1
                     for i in 0...usedGroupDescriptorBlocks {
                         bitmap[Int(i / 8)] |= 1 << (i % 8)
                     }
-                    for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
-                        bitmap[Int(i / 8)] &= ~(1 << (i % 8))
-                        blocks -= 1
+                    if usedGroupDescriptorBlocks + 1 <= self.groupDescriptorBlocks {
+                        for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
+                            bitmap[Int(i / 8)] &= ~(1 << (i % 8))
+                            blocks -= 1
+                        }
                     }
                 }
 
@@ -952,7 +952,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt32(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1101,7 +1101,7 @@ extension EXT4 {
                     }
                 }
             case 5..<4 * UInt32(extentsPerBlock) + 1:
-                let extentBlocks = numExtents / extentsPerBlock + 1
+                let extentBlocks = (numExtents + extentsPerBlock - 1) / extentsPerBlock
                 usedBlocks += extentBlocks
                 let extentHeader = ExtentHeader(
                     magic: EXT4.ExtentHeaderMagic,
@@ -1135,7 +1135,7 @@ extension EXT4 {
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
@@ -1326,8 +1326,10 @@ extension Date {
             return 0x3_7fff_ffff
         }
 
-        let seconds = UInt64(s)
-        let nanoseconds = UInt64(self.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
+        let floorS = floor(s)
+        let seconds = UInt64(bitPattern: Int64(floorS)) & 0x3_ffff_ffff
+
+        let nanoseconds = UInt64((s - floorS) * 1_000_000_000)
 
         return seconds | (nanoseconds << 34)
     }

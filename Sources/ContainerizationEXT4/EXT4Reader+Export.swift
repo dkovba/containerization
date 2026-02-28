@@ -29,7 +29,7 @@ extension EXT4.EXT4Reader {
         let hardlinkedInodes = Set(self.hardlinks.values)
         var hardlinkTargets: [EXT4.InodeNumber: FilePath] = [:]
 
-        while items.count > 0 {
+        while !items.isEmpty {
             let itemPtr = items.removeFirst()
             let item = itemPtr.pointee
             let inode = try self.getInode(number: item.inode)
@@ -73,9 +73,12 @@ extension EXT4.EXT4Reader {
             entry.size = Int64(size)
             entry.group = gid_t(inode.gid)
             entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            entry.creationDate = Date(
+                fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))
+            entry.modificationDate = Date(
+                fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(
+                fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             entry.xattrs = xattrs
 
             if mode.isDir() {
@@ -130,7 +133,7 @@ extension EXT4.EXT4Reader {
                 entry.fileType = .symbolicLink
                 if size < 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
-                    entry.symlinkTarget = String(bytes: linkBytes, encoding: .utf8) ?? ""
+                    entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
                     if let block = item.blocks {
                         try self.seek(block: block.start)
@@ -156,9 +159,12 @@ extension EXT4.EXT4Reader {
             entry.permissions = inode.mode
             entry.group = gid_t(inode.gid)
             entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            entry.creationDate = Date(
+                fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))
+            entry.modificationDate = Date(
+                fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(
+                fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             try writer.writeEntry(entry: entry, data: nil)
         }
         try writer.finishEncoding()
@@ -170,7 +176,7 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readInlineExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
@@ -183,12 +189,12 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readBlockExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
 
-        return try EXT4.FileXattrsState.read(buffer: [UInt8](buffer), start: 32, offset: 0)
+        return try EXT4.FileXattrsState.read(buffer: buffer, start: 32, offset: 0)
     }
 
     func seek(block: UInt32) throws {
@@ -203,7 +209,13 @@ extension Date {
             return
         }
 
-        let seconds = Int64(fsTimestamp & 0x3_ffff_ffff)
+        let rawBits = fsTimestamp & 0x3_ffff_ffff
+        let seconds: Int64
+        if rawBits >> 33 != 0 {
+            seconds = Int64(bitPattern: rawBits | 0xFFFF_FFFC_0000_0000)
+        } else {
+            seconds = Int64(rawBits)
+        }
         let nanoseconds = Double(fsTimestamp >> 34) / 1_000_000_000
 
         self = Date(timeIntervalSince1970: Double(seconds) + nanoseconds)

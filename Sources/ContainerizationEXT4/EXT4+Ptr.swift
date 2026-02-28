@@ -14,12 +14,10 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-import Foundation
-
 extension EXT4 {
     class Ptr<T> {
-        let underlying: UnsafeMutablePointer<T>
-        private var capacity: Int
+        private let underlying: UnsafeMutablePointer<T>
+        private let capacity: Int
         private var initialized: Bool
         private var allocated: Bool
 
@@ -46,7 +44,6 @@ extension EXT4 {
                 self.underlying.deinitialize(count: self.capacity)
             }
             self.underlying.initialize(to: value)
-            self.allocated = true
             self.initialized = true
         }
 
@@ -68,12 +65,16 @@ extension EXT4 {
             }
             self.underlying.deinitialize(count: count)
             self.initialized = false
-            self.allocated = true
         }
 
         func move() -> T {
+            guard self.allocated else {
+                fatalError("EXT4.Ptr.move() called on deallocated pointer")
+            }
+            guard self.initialized else {
+                fatalError("EXT4.Ptr.move() called on uninitialized pointer")
+            }
             self.initialized = false
-            self.allocated = true
             return self.underlying.move()
         }
 

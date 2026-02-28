@@ -22,7 +22,7 @@ extension EXT4 {
     public struct SuperBlock {
         public var inodesCount: UInt32 = 0
         public var blocksCountLow: UInt32 = 0
-        public var rootBlocksCountLow: UInt32 = 0
+        public var reservedBlocksCountLow: UInt32 = 0
         public var freeBlocksCountLow: UInt32 = 0
         public var freeInodesCount: UInt32 = 0
         public var firstDataBlock: UInt32 = 0
@@ -590,7 +590,7 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        let reserved: (UInt32, UInt32, UInt32)
     }
 
 }

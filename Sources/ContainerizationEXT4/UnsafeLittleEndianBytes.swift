@@ -16,7 +16,8 @@
 
 import Foundation
 
-// takes a pointer and converts its contents to native endian bytes
+// Converts the in-memory bytes of `value` to little-endian byte order and
+// calls `body` with an UnsafeRawBufferPointer over those bytes.
 public func withUnsafeLittleEndianBytes<T, Result>(of value: T, body: (UnsafeRawBufferPointer) throws -> Result)
     rethrows -> Result
 {
@@ -50,7 +51,8 @@ public func withUnsafeLittleEndianBuffer<T>(
 }
 
 extension UnsafeRawBufferPointer {
-    // loads littleEndian raw data, converts it native endian format and calls UnsafeRawBufferPointer.load
+    // Loads little-endian raw data, converts it to native-endian format and
+    // calls UnsafeRawBufferPointer.load.
     public func loadLittleEndian<T>(as type: T.Type) -> T {
         switch Endian {
         case .little:
@@ -64,13 +66,13 @@ extension UnsafeRawBufferPointer {
     }
 }
 
-public enum Endianness {
+public enum Endianness: Sendable {
     case little
     case big
 }
 
 // returns current endianness
-public var Endian: Endianness {
+public let Endian: Endianness = {
     switch CFByteOrderGetCurrent() {
     case CFByteOrder(CFByteOrderLittleEndian.rawValue):
         return .little
@@ -79,4 +81,4 @@ public var Endian: Endianness {
     default:
         fatalError("impossible")
     }
-}
+}()
