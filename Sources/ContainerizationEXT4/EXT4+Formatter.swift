@@ -235,13 +235,13 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                if linkedInode.linksCount > 1 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            guard inodeNumber >= Int(FirstInode) - 1 else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -805,13 +805,10 @@ extension EXT4 {
             }
             for group in blockGroupSize.blockGroups..<totalGroups.lo {
                 var blocksInGroup = UInt32(self.blocksPerGroup)
-                if group == totalGroups.lo {
-                    if UInt64(self.size / UInt64(self.blockSize)) < self.blocksPerGroup {
-                        break
-                    }
-                    blocksInGroup = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
-                    if blocksInGroup == 0 {
-                        break
+                if group == totalGroups.lo - 1 {
+                    let lastGroupBlocks = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
+                    if lastGroupBlocks != 0 {
+                        blocksInGroup = lastGroupBlocks
                     }
                 }
                 let blockBitmapOffset = UInt64(group * self.blocksPerGroup + inodeTableSizePerGroup)
@@ -838,17 +835,20 @@ extension EXT4 {
                 totalBlocks += (inodeTableSizePerGroup + 2)
                 try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
 
-                if group == totalGroups.lo {
-                    var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
-                    for i in blocksInGroup..<UInt32(self.blocksPerGroup) {
-                        blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
+                if group == totalGroups.lo - 1 {
+                    let lastGroupBlocks = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
+                    if lastGroupBlocks != 0 && lastGroupBlocks < self.blocksPerGroup {
+                        var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
+                        for i in lastGroupBlocks..<UInt32(self.blocksPerGroup) {
+                            blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
+                        }
+                        for i in 0..<inodeTableSizePerGroup + 2 {
+                            blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
+                        }
+                        try self.handle.write(contentsOf: blockBitmapLo)
+                        try self.handle.write(contentsOf: inodeBitmap)
+                        continue
                     }
-                    for i in 0..<inodeTableSizePerGroup + 2 {
-                        blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
-                    }
-                    try self.handle.write(contentsOf: blockBitmapLo)
-                    try self.handle.write(contentsOf: inodeBitmap)
-                    continue
                 }
 
                 try self.handle.write(contentsOf: blockBitmap)
@@ -1324,6 +1324,10 @@ extension Date {
 
         if s > 0x3_7fff_ffff {
             return 0x3_7fff_ffff
+        }
+
+        guard s >= 0 else {
+            return 0
         }
 
         let seconds = UInt64(s)
