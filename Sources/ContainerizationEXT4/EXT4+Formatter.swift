@@ -235,13 +235,13 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                if linkedInode.linksCount > 0 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            guard pathNode.inode > EXT4.FirstInode else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -952,7 +952,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt32(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1322,8 +1322,12 @@ extension Date {
             return 0x8000_0000
         }
 
-        if s > 0x3_7fff_ffff {
-            return 0x3_7fff_ffff
+        if s > 0x3_ffff_ffff {
+            return 0x3_ffff_ffff
+        }
+
+        if s < 0 {
+            return 0
         }
 
         let seconds = UInt64(s)

@@ -590,7 +590,7 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        let reserved: (UInt32, UInt32, UInt32)
     }
 
 }

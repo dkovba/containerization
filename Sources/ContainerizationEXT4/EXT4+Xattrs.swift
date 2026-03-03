@@ -61,8 +61,7 @@ extension EXT4 {
             }
             var i = 0
             while i + 3 < value.count {
-                let s = value[i..<i + 4]
-                let v = UInt32(littleEndian: s.withUnsafeBytes { $0.load(as: UInt32.self) })
+                let v = UInt32(value[i]) | (UInt32(value[i+1]) << 8) | (UInt32(value[i+2]) << 16) | (UInt32(value[i+3]) << 24)
                 hash = (hash << 16) ^ (hash >> 16) ^ v
                 i += 4
             }
@@ -72,7 +71,7 @@ extension EXT4 {
                 for (i, byte) in value[last...].enumerated() {
                     buff[i] = byte
                 }
-                let v = UInt32(littleEndian: buff.withUnsafeBytes { $0.load(as: UInt32.self) })
+                let v = UInt32(buff[0]) | (UInt32(buff[1]) << 8) | (UInt32(buff[2]) << 16) | (UInt32(buff[3]) << 24)
                 hash = (hash << 16) ^ (hash >> 16) ^ v
             }
             return hash
@@ -176,12 +175,11 @@ extension EXT4 {
                 idx += 1
             }
             var attributes = self.blockAttributes
-            attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
-                }
-                return false
-            })
+            attributes.sort {
+                if $0.index != $1.index { return $0.index < $1.index }
+                if $0.name.count != $1.name.count { return $0.name.count < $1.name.count }
+                return $0.name < $1.name
+            }
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
 
@@ -254,7 +252,7 @@ extension EXT4 {
             var i = start
             var attribs: [ExtendedAttribute] = []
             // 16 is the size of 1 XAttrEntry
-            while i + 16 < buffer.count {
+            while i + 16 <= buffer.count {
                 let attributeStart = i
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)

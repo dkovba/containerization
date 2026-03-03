@@ -77,17 +77,10 @@ extension EXT4.XAttrEntry {
         }
         nameLength = bytes[0]
         nameIndex = bytes[1]
-        let rawValue = Array(bytes[2...3])
-        valueOffset = UInt16(littleEndian: rawValue.withUnsafeBytes { $0.load(as: UInt16.self) })
-
-        let rawValueInum = Array(bytes[4...7])
-        valueInum = UInt32(littleEndian: rawValueInum.withUnsafeBytes { $0.load(as: UInt32.self) })
-
-        let rawSize = Array(bytes[8...11])
-        valueSize = UInt32(littleEndian: rawSize.withUnsafeBytes { $0.load(as: UInt32.self) })
-
-        let rawHash = Array(bytes[12...])
-        hash = UInt32(littleEndian: rawHash.withUnsafeBytes { $0.load(as: UInt32.self) })
+        valueOffset = UInt16(bytes[2]) | UInt16(bytes[3]) << 8
+        valueInum = UInt32(bytes[4]) | UInt32(bytes[5]) << 8 | UInt32(bytes[6]) << 16 | UInt32(bytes[7]) << 24
+        valueSize = UInt32(bytes[8]) | UInt32(bytes[9]) << 8 | UInt32(bytes[10]) << 16 | UInt32(bytes[11]) << 24
+        hash = UInt32(bytes[12]) | UInt32(bytes[13]) << 8 | UInt32(bytes[14]) << 16 | UInt32(bytes[15]) << 24
     }
 }
 

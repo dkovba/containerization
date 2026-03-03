@@ -43,7 +43,7 @@ extension EXT4 {
                 return
             }
             if self.initialized {
-                self.underlying.deinitialize(count: self.capacity)
+                self.underlying.deinitialize(count: 1)
             }
             self.underlying.initialize(to: value)
             self.allocated = true
@@ -72,6 +72,9 @@ extension EXT4 {
         }
 
         func move() -> T {
+            guard self.initialized else {
+                fatalError("attempt to move from uninitialized Ptr")
+            }
             self.initialized = false
             self.allocated = true
             return self.underlying.move()
