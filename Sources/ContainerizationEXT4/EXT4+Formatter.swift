@@ -235,7 +235,7 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                if linkedInode.linksCount > 1 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
@@ -771,7 +771,7 @@ extension EXT4 {
                 let blockBitmap = UInt64(bitmapOffset + 2 * group)
                 let inodeBitmap = UInt64(bitmapOffset + 2 * group + 1)
                 let inodeTable = inodeTableOffset + UInt64(group * inodeTableSizePerGroup)
-                let freeBlocksCount = UInt32(self.blocksPerGroup - blocks)
+                let freeBlocksCount = freeBlocks
                 let freeInodesCount = UInt32(blockGroupSize.inodesPerGroup - inodes)
                 groupDescriptors.append(
                     // low bits
@@ -952,7 +952,7 @@ extension EXT4 {
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt64(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1326,9 +1326,10 @@ extension Date {
             return 0x3_7fff_ffff
         }
 
-        let seconds = UInt64(s)
-        let nanoseconds = UInt64(self.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
-
-        return seconds | (nanoseconds << 34)
+        let wholeSeconds = Int64(s.rounded(.down))
+        let frac = s - Double(wholeSeconds)
+        let nanoseconds = UInt64(frac * 1_000_000_000)
+        let packedSeconds = UInt64(bitPattern: wholeSeconds) & 0x3_FFFF_FFFF
+        return packedSeconds | (nanoseconds << 34)
     }
 }

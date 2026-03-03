@@ -57,7 +57,8 @@ extension EXT4 {
         var hash: UInt32 {
             var hash: UInt32 = 0
             for char in name {
-                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue!)
+                guard let asciiVal = char.asciiValue else { continue }
+                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(asciiVal)
             }
             var i = 0
             while i + 3 < value.count {
@@ -177,10 +178,9 @@ extension EXT4 {
             }
             var attributes = self.blockAttributes
             attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
-                }
-                return false
+                if $0.index != $1.index { return $0.index < $1.index }
+                if $0.name.count != $1.name.count { return $0.name.count < $1.name.count }
+                return $0.name < $1.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
@@ -264,7 +264,9 @@ extension EXT4 {
                     continue
                 }
                 let rawName = buffer[i..<endIndex]
-                let name = String(bytes: rawName, encoding: .ascii)!
+                guard let name = String(bytes: rawName, encoding: .ascii) else {
+                    continue
+                }
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
                 let value = [UInt8](buffer[valueStart..<valueEnd])
