@@ -50,13 +50,22 @@ extension EXT4 {
             self.initialized = true
         }
 
+        // Bug #15 (HIGH, 2 parts): (a) deallocate() called underlying.deallocate() without first calling
+        // deinitialize(), leaking ARC-managed values (e.g. FileTreeNode.children Array) held in T.
+        // (b) move() had no guard, allowing it to be called on uninitialized or deallocated memory,
+        // causing undefined behaviour. Fixed by calling deinitialize in deallocate() and adding
+        // an allocated && initialized guard to move().
+        // Same fix: sonnet, sonnet-1m, sonnet-fix. All other branches leak ARC values on dealloc.
         func deallocate() {
             guard self.allocated else {
                 return
             }
+            if self.initialized {
+                self.underlying.deinitialize(count: self.capacity)
+                self.initialized = false
+            }
             self.underlying.deallocate()
             self.allocated = false
-            self.initialized = false
         }
 
         func deinitialize(count: Int) {
@@ -72,8 +81,11 @@ extension EXT4 {
         }
 
         func move() -> T {
+            // Bug #15
+            guard self.allocated && self.initialized else {
+                fatalError("move() called on an uninitialized or deallocated Ptr")
+            }
             self.initialized = false
-            self.allocated = true
             return self.underlying.move()
         }
 
