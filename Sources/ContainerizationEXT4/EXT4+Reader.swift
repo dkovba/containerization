@@ -171,13 +171,25 @@ extension EXT4 {
         private func getDirEntries(dirTree: Data) throws -> [(String, InodeNumber)] {
             var children: [(String, InodeNumber)] = []
             var offset = 0
+            let headerSize = MemoryLayout<DirectoryEntry>.size
             while offset < dirTree.count {
-                let length = MemoryLayout<DirectoryEntry>.size
-                let dirEntry = dirTree.subdata(in: offset..<offset + length).withUnsafeBytes {
+                let dirEntry = dirTree.subdata(in: offset..<offset + headerSize).withUnsafeBytes {
                     $0.loadLittleEndian(as: DirectoryEntry.self)
                 }
-                if dirEntry.inode == 0 {
+                // Bug #14 (HIGH): inode == 0 marks a deleted entry; original code used break,
+                // stopping parse of the entire block. In ext4, deleted entries can appear mid-block
+                // with valid entries following them. Fixed to continue (skip deleted, keep parsing).
+                // Also added guard recordLength >= headerSize to prevent infinite loops on malformed
+                // blocks where recordLength == 0 would never advance offset.
+                // Same fix: sonnet, sonnet-1m, sonnet-fix.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-1m, sonnet-fix-bulk still break on deleted
+                // entries — any valid entry after a hole in the block is silently lost.
+                guard dirEntry.recordLength >= headerSize else {
                     break
+                }
+                if dirEntry.inode == 0 {
+                    offset += Int(dirEntry.recordLength)
+                    continue
                 }
                 let nameData = dirTree.subdata(in: offset + 8..<offset + 8 + Int(dirEntry.nameLength))
                 let name = String(data: nameData, encoding: .utf8) ?? ""
