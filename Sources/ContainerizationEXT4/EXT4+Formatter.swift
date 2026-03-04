@@ -1326,6 +1326,13 @@ extension Date {
             return 0x3_7fff_ffff
         }
 
+        // Bug #1 (CRITICAL): UInt64(s) traps with a Swift runtime precondition failure when s is
+        // negative (pre-1970 dates), e.g. from archives with zeroed timestamps. The < -0x8000_0000
+        // clamp above only catches very early dates; values in (-2^31, 0) reached UInt64() and crashed.
+        // Fixed by guarding s >= 0 before the UInt64 conversion.
+        // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+        // sonnet-bulk and sonnet-1m-bulk omit this guard — still crash on s in (-2^31, 0).
+        guard s >= 0 else { return 0 }
         let seconds = UInt64(s)
         let nanoseconds = UInt64(self.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
 
