@@ -979,8 +979,12 @@ extension EXT4 {
                 try self.handle.write(
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
+            // Bug #21 (HIGH): Used Darwin-only uint32 C alias (compile error on Linux) and
+            // UInt32 * UInt32 multiplication (overflow at ~16.7M inodes). Fixed to UInt64 arithmetic.
+            // Same fix: sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-1m, sonnet-fix, sonnet-fix-bulk.
+            // opus, opus-bulk, opus-1m-bulk still use UInt32 — will crash on large filesystems.
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt64(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
