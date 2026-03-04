@@ -235,7 +235,12 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                // Bug #7 (HIGH): Threshold was > 2; a file with exactly 2 links (original + 1 hardlink)
+                // had linksCount == 2, so 2 > 2 == false and the count was never decremented.
+                // Fixed to > 1. Same fix: sonnet, sonnet-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-bulk, opus-1m still use > 2 — inode stays
+                // marked in-use after its last hardlink is removed.
+                if linkedInode.linksCount > 1 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
