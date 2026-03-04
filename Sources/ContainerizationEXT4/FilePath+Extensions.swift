@@ -54,19 +54,15 @@ extension FilePath {
     }
 
     public init?(_ data: Data) {
-        let cstr: String? = data.withUnsafeBytes { (rbp: UnsafeRawBufferPointer) in
-            guard let baseAddress = rbp.baseAddress else {
-                return nil
-            }
-
-            let cString = baseAddress.bindMemory(to: CChar.self, capacity: data.count)
-            return String(cString: cString)
-        }
-
-        guard let cstr else {
+        // Bug #12 (HIGH): Was String(cString: ...) which reads until a null terminator with no
+        // bounds check; Data without a trailing null byte would read into adjacent heap memory (UB).
+        // Fixed to String(bytes: data, encoding: .utf8) which respects the data length.
+        // Same fix: sonnet, sonnet-1m, opus, opus-1m, sonnet-fix.
+        // sonnet-bulk, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix-bulk still use cString.
+        guard let str = String(bytes: data, encoding: .utf8) else {
             return nil
         }
-        self.init(cstr)
+        self.init(str)
     }
 
     public func join(_ path: FilePath) -> FilePath {
