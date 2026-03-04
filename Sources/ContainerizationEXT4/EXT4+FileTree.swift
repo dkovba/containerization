@@ -26,7 +26,11 @@ extension EXT4 {
             var blocks: (start: UInt32, end: UInt32)?
             var additionalBlocks: [(start: UInt32, end: UInt32)]?
             var link: InodeNumber?
-            private var parent: Ptr<FileTreeNode>?
+            // Bug #16 (HIGH): parent was a strong Ptr<FileTreeNode>; the parent holds children
+            // (strong) and each child holds parent (strong), forming an ARC retain cycle that
+            // prevented deallocation of the entire file tree. Fixed to weak var.
+            // Same fix: sonnet, sonnet-fix. All other branches leak the full tree on EXT4Reader deinit.
+            private weak var parent: Ptr<FileTreeNode>?
 
             init(
                 inode: InodeNumber,
