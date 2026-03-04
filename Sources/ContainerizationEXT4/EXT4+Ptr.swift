@@ -43,7 +43,13 @@ extension EXT4 {
                 return
             }
             if self.initialized {
-                self.underlying.deinitialize(count: self.capacity)
+                // Bug #17 (HIGH): Was deinitialize(count: self.capacity); initialize(to:) only
+                // initializes exactly 1 element, so if capacity > 1 this deinitializes memory beyond
+                // the one initialized element, causing undefined behaviour. Fixed to count: 1.
+                // Same fix: opus, opus-1m, sonnet-fix.
+                // sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-bulk, opus-1m-bulk,
+                // sonnet-fix-bulk still pass capacity — UB if capacity is ever > 1.
+                self.underlying.deinitialize(count: 1)
             }
             self.underlying.initialize(to: value)
             self.allocated = true
