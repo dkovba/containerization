@@ -246,7 +246,13 @@ extension EXT4 {
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            // Bug #8 (HIGH): Original guard used 0-based inodeNumber (= pathNode.inode - 1) with
+            // 1-based FirstInode=11, so inode 12 produced inodeNumber=11 and 11 > 11 == false —
+            // blocks were never freed. Fixed to >= (11 >= 11 == true). Equivalent to the cleaner
+            // form guard pathNode.inode > EXT4.FirstInode suggested in BUGFIXES.md.
+            // Same fix: sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus, opus-1m-bulk, sonnet-fix.
+            // opus-bulk, opus-1m, sonnet-fix-bulk still use > FirstInode — inode 12 blocks never freed.
+            guard inodeNumber >= FirstInode else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
