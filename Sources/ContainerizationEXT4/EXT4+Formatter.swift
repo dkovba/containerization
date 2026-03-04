@@ -1112,7 +1112,13 @@ extension EXT4 {
                     }
                 }
             case 5..<4 * UInt32(extentsPerBlock) + 1:
-                let extentBlocks = numExtents / extentsPerBlock + 1
+                // Bug #18 (HIGH): numExtents / extentsPerBlock + 1 always added 1 even when evenly
+                // divisible, creating an extra empty leaf block; leafNode.leaves.last! then
+                // force-unwrapped nil and crashed. Fixed to proper ceiling division.
+                // Same fix: sonnet, sonnet-1m, sonnet-1m-bulk.
+                // sonnet-bulk, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk
+                // still use + 1 — crash whenever numExtents is a multiple of extentsPerBlock.
+                let extentBlocks = (numExtents + extentsPerBlock - 1) / extentsPerBlock
                 usedBlocks += extentBlocks
                 let extentHeader = ExtentHeader(
                     magic: EXT4.ExtentHeaderMagic,
