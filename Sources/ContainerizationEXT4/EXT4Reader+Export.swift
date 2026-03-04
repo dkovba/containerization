@@ -71,11 +71,11 @@ extension EXT4.EXT4Reader {
             let pathStr = path.description
             entry.path = pathStr
             entry.size = Int64(size)
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            // Bug #13 (HIGH, 2 parts): Only the low 16 bits of UID/GID were used; UIDs and GIDs above 65535
+            // were silently truncated to wrong IDs. Fixed by combining the high and low fields.
+            // Same fix: opus, opus-1m. All other branches truncate high-range UIDs/GIDs.
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)
             // Bug #4 (CRITICAL, 2 parts): creationDate was set from ctime/ctimeExtra (inode change time,
             // updated on every metadata modification) instead of crtime/crtimeExtra (birth time,
             // set once at creation). Fixed to use the correct crtime fields.
@@ -171,8 +171,8 @@ extension EXT4.EXT4Reader {
             entry.path = path.description
             entry.hardlink = targetPath.description
             entry.permissions = inode.mode
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)  // Bug #13
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)  // Bug #13
             entry.creationDate = Date(fsTimestamp: (UInt64(inode.crtimeExtra) << 32) | UInt64(inode.crtime))  // Bug #4, Bug #3
             entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))  // Bug #3
             entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))  // Bug #3
