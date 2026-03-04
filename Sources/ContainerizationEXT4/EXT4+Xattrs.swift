@@ -17,8 +17,12 @@
 import Foundation
 
 /*
+ * Bug #50 (LOW): Comment originally read "is less than not a multiple of 4" (garbled phrase
+ * resulting from a bad edit). Fixed to "is not a multiple of 4".
+ * Same fix: opus-1m. All other branches retain the garbled comment.
+ *
  * Note: Both the entries and values for the attributes need to occupy a size that is a multiple of 4,
- * meaning, in cases where the attribute name or value is less than not a multiple of 4, it is padded with 0
+ * meaning, in cases where the attribute name or value is not a multiple of 4, it is padded with 0
  * until it reaches that size.
  */
 
@@ -57,7 +61,11 @@ extension EXT4 {
         var hash: UInt32 {
             var hash: UInt32 = 0
             for char in name {
-                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue!)
+                // Bug #24 (MEDIUM): Was char.asciiValue! (force-unwrap); any xattr name containing
+                // a non-ASCII character crashed. Fixed to ?? 0 (non-ASCII chars contribute 0 to hash).
+                // Same fix: sonnet, sonnet-1m, opus-1m, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-bulk, opus-1m-bulk, sonnet-fix still crash.
+                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue ?? 0)
             }
             var i = 0
             while i + 3 < value.count {
@@ -176,11 +184,16 @@ extension EXT4 {
                 idx += 1
             }
             var attributes = self.blockAttributes
+            // Bug #5 (CRITICAL): Sort closure used || to chain criteria; when a.index > b.index but
+            // a.name.count < b.name.count it returned true, violating strict weak ordering and producing
+            // undefined sort behaviour (crash or wrong order with different stdlib versions).
+            // Fixed to proper lexicographic chaining with early returns on inequality.
+            // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+            // sonnet-bulk and sonnet-1m-bulk still use || — undefined sort order, potential crash.
             attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
-                }
-                return false
+                if $0.index != $1.index { return $0.index < $1.index }
+                if $0.name.count != $1.name.count { return $0.name.count < $1.name.count }
+                return $0.name < $1.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
@@ -254,7 +267,11 @@ extension EXT4 {
             var i = start
             var attribs: [ExtendedAttribute] = []
             // 16 is the size of 1 XAttrEntry
-            while i + 16 < buffer.count {
+            // Bug #26 (MEDIUM): Loop condition was i + 16 < buffer.count (strict <), which skipped
+            // the last valid entry when exactly 16 bytes remained (i + 16 == buffer.count).
+            // Fixed to <=. Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix.
+            // sonnet-bulk, sonnet-1m-bulk, sonnet-fix-bulk still use < — last xattr silently dropped.
+            while i + 16 <= buffer.count {
                 let attributeStart = i
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
@@ -264,9 +281,20 @@ extension EXT4 {
                     continue
                 }
                 let rawName = buffer[i..<endIndex]
-                let name = String(bytes: rawName, encoding: .ascii)!
+                // Bug #25 (MEDIUM): Was String(bytes: rawName, encoding: .ascii)! (force-unwrap);
+                // any attribute name containing non-ASCII bytes crashed. Fixed to ?? "".
+                // Same fix: sonnet, opus, opus-1m, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix still crash.
+                let name = String(bytes: rawName, encoding: .ascii) ?? ""
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
+                // Bug #27 (MEDIUM): buffer[valueStart..<valueEnd] had no bounds check; a corrupted
+                // or truncated xattr block could produce valueEnd > buffer.count, causing a crash.
+                // Fixed by guarding valueEnd <= buffer.count. Only opus has this fix.
+                // All other branches crash on any xattr block with an out-of-range value offset.
+                guard valueEnd <= buffer.count else {
+                    break
+                }
                 let value = [UInt8](buffer[valueStart..<valueEnd])
                 let xattr = ExtendedAttribute(idx: xattrEntry.nameIndex, compressedName: name, value: value)
                 attribs.append(xattr)

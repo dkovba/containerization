@@ -120,8 +120,13 @@ extension EXT4 {
         }
 
         private func readGroupDescriptor(_ number: UInt32) throws -> GroupDescriptor {
-            let bs = UInt64(1024 * (1 << _superBlock.logBlockSize))
-            let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)
+            // Bug #35 (MEDIUM): GDT offset was computed as blockSize + ..., which for 1024-byte blocks
+            // placed the GDT inside the superblock region. The correct formula per ext4 spec is
+            // (firstDataBlock + 1) * blockSize: block 0 for 4096-byte fs (firstDataBlock=0) or
+            // block 2 for 1024-byte fs (firstDataBlock=1). Fixed accordingly.
+            // Same fix: sonnet-1m. All other branches use the wrong offset for 1024-byte blocks.
+            let gdtOffset = (UInt64(_superBlock.firstDataBlock) + 1) * blockSize
+            let offset = gdtOffset + UInt64(number) * UInt64(self.groupDescriptorSize)
             try self.handle.seek(toOffset: offset)
             guard let data = try? self.handle.read(upToCount: MemoryLayout<EXT4.GroupDescriptor>.size) else {
                 throw EXT4.Error.couldNotReadGroup(number)
@@ -171,13 +176,25 @@ extension EXT4 {
         private func getDirEntries(dirTree: Data) throws -> [(String, InodeNumber)] {
             var children: [(String, InodeNumber)] = []
             var offset = 0
+            let headerSize = MemoryLayout<DirectoryEntry>.size
             while offset < dirTree.count {
-                let length = MemoryLayout<DirectoryEntry>.size
-                let dirEntry = dirTree.subdata(in: offset..<offset + length).withUnsafeBytes {
+                let dirEntry = dirTree.subdata(in: offset..<offset + headerSize).withUnsafeBytes {
                     $0.loadLittleEndian(as: DirectoryEntry.self)
                 }
-                if dirEntry.inode == 0 {
+                // Bug #14 (HIGH): inode == 0 marks a deleted entry; original code used break,
+                // stopping parse of the entire block. In ext4, deleted entries can appear mid-block
+                // with valid entries following them. Fixed to continue (skip deleted, keep parsing).
+                // Also added guard recordLength >= headerSize to prevent infinite loops on malformed
+                // blocks where recordLength == 0 would never advance offset.
+                // Same fix: sonnet, sonnet-1m, sonnet-fix.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-1m, sonnet-fix-bulk still break on deleted
+                // entries — any valid entry after a hole in the block is silently lost.
+                guard dirEntry.recordLength >= headerSize else {
                     break
+                }
+                if dirEntry.inode == 0 {
+                    offset += Int(dirEntry.recordLength)
+                    continue
                 }
                 let nameData = dirTree.subdata(in: offset + 8..<offset + 8 + Int(dirEntry.nameLength))
                 let name = String(data: nameData, encoding: .utf8) ?? ""
@@ -210,8 +227,13 @@ extension EXT4 {
             case 0:
                 // When depth is 0 the extent header is followed by extent leaves
                 for _ in 0..<header.entries {
+                    // Bug #33 (MEDIUM): Inline extent data was loaded with $0.load(as:) (native
+                    // endian) while block extent data used loadLittleEndian. On big-endian platforms
+                    // all inline extent fields were byte-swapped. Fixed to loadLittleEndian throughout.
+                    // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix.
+                    // sonnet-bulk, sonnet-1m-bulk, sonnet-fix-bulk use plain load — wrong on big-endian.
                     let leaf = inodeBlock.subdata(in: offset..<offset + extentLeafSize).withUnsafeBytes {
-                        $0.load(as: ExtentLeaf.self)
+                        $0.loadLittleEndian(as: ExtentLeaf.self)
                     }
                     extents.append((leaf.startLow, leaf.startLow + UInt32(leaf.length)))
                     offset += extentLeafSize
@@ -220,7 +242,7 @@ extension EXT4 {
                 // When depth is 1 the extent header is followed by extent indices which point to leaves
                 for _ in 0..<header.entries {
                     let indexNode = inodeBlock.subdata(in: offset..<offset + extentIndexSize).withUnsafeBytes {
-                        $0.load(as: ExtentIndex.self)
+                        $0.loadLittleEndian(as: ExtentIndex.self)
                     }
                     try self.seek(block: indexNode.leafLow)
                     guard let block = try self.handle.read(upToCount: Int(self.blockSize)) else {
@@ -271,6 +293,15 @@ extension EXT4 {
 
         func children(of number: EXT4.InodeNumber) throws -> [(String, InodeNumber)] {
             try getDirTree(number)
+        }
+
+        // Bug #29 (MEDIUM, 2 parts): seek(block:) was defined inside #if os(macOS) in EXT4Reader+Export.swift
+        // but called from platform-independent code in EXT4+Reader.swift (getDirTree, getExtents).
+        // This caused a compile error on Linux. Fixed by moving the definition here, outside any
+        // platform guard. Same fix: sonnet-1m-bulk, opus-1m.
+        // All other branches still place seek(block:) in the macOS-only file — won't compile on Linux.
+        func seek(block: UInt32) throws {
+            try self.handle.seek(toOffset: UInt64(block) * blockSize)
         }
     }
 }

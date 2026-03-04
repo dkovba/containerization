@@ -26,7 +26,11 @@ extension EXT4 {
             var blocks: (start: UInt32, end: UInt32)?
             var additionalBlocks: [(start: UInt32, end: UInt32)]?
             var link: InodeNumber?
-            private var parent: Ptr<FileTreeNode>?
+            // Bug #16 (HIGH): parent was a strong Ptr<FileTreeNode>; the parent holds children
+            // (strong) and each child holds parent (strong), forming an ARC retain cycle that
+            // prevented deallocation of the entire file tree. Fixed to weak var.
+            // Same fix: sonnet, sonnet-fix. All other branches leak the full tree on EXT4Reader deinit.
+            private weak var parent: Ptr<FileTreeNode>?
 
             init(
                 inode: InodeNumber,
@@ -54,28 +58,31 @@ extension EXT4 {
                 self.link = nil
             }
 
+            // Bug #41 (LOW): Old path used pushing(FilePath(last)) where last was "/" (the root
+            // name), which pushed an absolute path and replaced the entire base; every node's path
+            // returned "/". Bug #42 (LOW): Old path also did a pointless String→Data→String
+            // round-trip via UTF-8 re-encoding. Both fixed by building a components array and joining
+            // with "/" using the root name as a prefix. Same fix: sonnet-1m (both bugs).
+            // All other branches return "/" for every node's path (symlinks/xattrs reference wrong files).
             var path: FilePath? {
                 var components: [String] = [self.name]
-                var _ptr = self.parent
-                while let ptr = _ptr {
+                var current = self.parent
+                while let ptr = current {
                     components.append(ptr.pointee.name)
-                    _ptr = ptr.pointee.parent
+                    current = ptr.pointee.parent
                 }
-                guard let last = components.last else {
+                guard let rootName = components.last else {
                     return nil
                 }
-                guard components.count > 1 else {
-                    return FilePath(last)
+                let pathComponents = Array(components.dropLast().reversed())
+                if pathComponents.isEmpty {
+                    return FilePath(rootName)
                 }
-                components = components.dropLast()
-                let path = components.reversed().joined(separator: "/")
-                guard let data = path.data(using: .utf8) else {
-                    return nil
+                let joined = pathComponents.joined(separator: "/")
+                if rootName == "/" {
+                    return FilePath("/" + joined).lexicallyNormalized()
                 }
-                guard let dataPath = String(data: data, encoding: .utf8) else {
-                    return nil
-                }
-                return FilePath(dataPath).pushing(FilePath(last)).lexicallyNormalized()
+                return FilePath(joined).lexicallyNormalized()
             }
         }
 

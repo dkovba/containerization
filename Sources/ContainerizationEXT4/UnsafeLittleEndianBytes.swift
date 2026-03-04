@@ -56,7 +56,13 @@ extension UnsafeRawBufferPointer {
         case .little:
             return self.load(as: T.self)
         case .big:
-            let buffer = Array(self.reversed())
+            let size = MemoryLayout<T>.size
+            // Bug #37 (MEDIUM): Was Array(self.reversed()), reversing all bytes in the entire buffer.
+            // For a multi-field struct this reverses field order as well as byte order within fields,
+            // giving completely wrong struct values on big-endian platforms.
+            // Fixed to Array(self.prefix(size).reversed()) — only the relevant bytes are reversed.
+            // Same fix: sonnet. All other branches produce wrong struct layout on big-endian platforms.
+            let buffer = Array(self.prefix(size).reversed())
             return buffer.withUnsafeBytes { ptr in
                 ptr.load(as: T.self)
             }
@@ -64,13 +70,17 @@ extension UnsafeRawBufferPointer {
     }
 }
 
-public enum Endianness {
+public enum Endianness: Sendable {
     case little
     case big
 }
 
 // returns current endianness
-public var Endian: Endianness {
+// Bug #36 (MEDIUM): Endian was a computed var (using keyword `var`), calling CFByteOrderGetCurrent()
+// on every single access (every I/O operation). Endianness cannot change at runtime.
+// Fixed to a lazy let constant. Same fix: sonnet-1m.
+// All other branches make redundant CoreFoundation calls on every read/write operation.
+public let Endian: Endianness = {
     switch CFByteOrderGetCurrent() {
     case CFByteOrder(CFByteOrderLittleEndian.rawValue):
         return .little
@@ -79,4 +89,4 @@ public var Endian: Endianness {
     default:
         fatalError("impossible")
     }
-}
+}()

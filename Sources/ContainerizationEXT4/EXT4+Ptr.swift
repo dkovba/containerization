@@ -18,7 +18,10 @@ import Foundation
 
 extension EXT4 {
     class Ptr<T> {
-        let underlying: UnsafeMutablePointer<T>
+        // Bug #44 (LOW): underlying had default internal access, allowing any code in the module to
+        // bypass the allocated/initialized safety guards and access the raw pointer directly.
+        // Fixed to private let. Same fix: sonnet-1m. All other branches leave it internal.
+        private let underlying: UnsafeMutablePointer<T>
         private var capacity: Int
         private var initialized: Bool
         private var allocated: Bool
@@ -43,20 +46,35 @@ extension EXT4 {
                 return
             }
             if self.initialized {
-                self.underlying.deinitialize(count: self.capacity)
+                // Bug #17 (HIGH): Was deinitialize(count: self.capacity); initialize(to:) only
+                // initializes exactly 1 element, so if capacity > 1 this deinitializes memory beyond
+                // the one initialized element, causing undefined behaviour. Fixed to count: 1.
+                // Same fix: opus, opus-1m, sonnet-fix.
+                // sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-bulk, opus-1m-bulk,
+                // sonnet-fix-bulk still pass capacity — UB if capacity is ever > 1.
+                self.underlying.deinitialize(count: 1)
             }
             self.underlying.initialize(to: value)
             self.allocated = true
             self.initialized = true
         }
 
+        // Bug #15 (HIGH, 2 parts): (a) deallocate() called underlying.deallocate() without first calling
+        // deinitialize(), leaking ARC-managed values (e.g. FileTreeNode.children Array) held in T.
+        // (b) move() had no guard, allowing it to be called on uninitialized or deallocated memory,
+        // causing undefined behaviour. Fixed by calling deinitialize in deallocate() and adding
+        // an allocated && initialized guard to move().
+        // Same fix: sonnet, sonnet-1m, sonnet-fix. All other branches leak ARC values on dealloc.
         func deallocate() {
             guard self.allocated else {
                 return
             }
+            if self.initialized {
+                self.underlying.deinitialize(count: self.capacity)
+                self.initialized = false
+            }
             self.underlying.deallocate()
             self.allocated = false
-            self.initialized = false
         }
 
         func deinitialize(count: Int) {
@@ -72,8 +90,11 @@ extension EXT4 {
         }
 
         func move() -> T {
+            // Bug #15
+            guard self.allocated && self.initialized else {
+                fatalError("move() called on an uninitialized or deallocated Ptr")
+            }
             self.initialized = false
-            self.allocated = true
             return self.underlying.move()
         }
 

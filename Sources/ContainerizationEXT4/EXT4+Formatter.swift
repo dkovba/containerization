@@ -235,13 +235,24 @@ extension EXT4 {
                 // the file we are deleting is a hardlink, decrement the link count
                 let linkedInodePtr = self.inodes[Int(hardlink - 1)]
                 var linkedInode = linkedInodePtr.pointee
-                if linkedInode.linksCount > 2 {
+                // Bug #7 (HIGH): Threshold was > 2; a file with exactly 2 links (original + 1 hardlink)
+                // had linksCount == 2, so 2 > 2 == false and the count was never decremented.
+                // Fixed to > 1. Same fix: sonnet, sonnet-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-bulk, opus-1m still use > 2 — inode stays
+                // marked in-use after its last hardlink is removed.
+                if linkedInode.linksCount > 1 {
                     linkedInode.linksCount -= 1
                     linkedInodePtr.initialize(to: linkedInode)
                 }
             }
 
-            guard inodeNumber > FirstInode else {
+            // Bug #8 (HIGH): Original guard used 0-based inodeNumber (= pathNode.inode - 1) with
+            // 1-based FirstInode=11, so inode 12 produced inodeNumber=11 and 11 > 11 == false —
+            // blocks were never freed. Fixed to >= (11 >= 11 == true). Equivalent to the cleaner
+            // form guard pathNode.inode > EXT4.FirstInode suggested in BUGFIXES.md.
+            // Same fix: sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus, opus-1m-bulk, sonnet-fix.
+            // opus-bulk, opus-1m, sonnet-fix-bulk still use > FirstInode — inode 12 blocks never freed.
+            guard inodeNumber >= FirstInode else {
                 // Free the inodes and the blocks related to the inode only if its valid
                 return
             }
@@ -595,16 +606,18 @@ extension EXT4 {
         //  The function performs any necessary final steps to ensure the integrity and consistency
         //  of the ext4 filesystem before it can be mounted and used.
         public func close() throws {
-            var breathWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
+            // Bug #47 (LOW): Variable was named breathWiseChildTree (missing 'd', not a word).
+            // Renamed to breadthWiseChildTree. Same fix: opus-1m. All other branches retain the typo.
+            var breadthWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
                 (nil, self.tree.root)
             ]
-            while !breathWiseChildTree.isEmpty {
-                let (parent, child) = breathWiseChildTree.removeFirst()
+            while !breadthWiseChildTree.isEmpty {
+                let (parent, child) = breadthWiseChildTree.removeFirst()
                 try self.commit(parent, child)  // commit directories iteratively
                 if child.pointee.link != nil {
                     continue
                 }
-                breathWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
+                breadthWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
             }
             let blockGroupSize = optimizeBlockGroupLayout(blocks: self.currentBlock, inodes: UInt32(self.inodes.count))
             let inodeTableOffset = try self.commitInodeTable(
@@ -627,8 +640,8 @@ extension EXT4 {
             if diskSize < minimumDiskSize {  // for data + metadata
                 diskSize = minimumDiskSize
             }
-            if self.size < minimumDiskSize {
-                self.size = UInt64(minimumDiskSize) * self.blockSize
+            if self.size < UInt64(minimumDiskSize) * UInt64(self.blockSize) {  // Bug #31
+                self.size = UInt64(minimumDiskSize) * UInt64(self.blockSize)
             }
             // number of blocks needed for group descriptors
             let groupDescriptorBlockCount: UInt32 = (blockGroupSize.blockGroups - 1) / self.groupsPerDescriptorBlock + 1
@@ -642,8 +655,8 @@ extension EXT4 {
             var groupDescriptors: [GroupDescriptor] = []
 
             let minGroups = (((self.pos / UInt64(self.blockSize)) - 1) / UInt64(self.blocksPerGroup)) + 1
-            if self.size < minGroups * blocksPerGroup * blockSize {
-                self.size = UInt64(minGroups * blocksPerGroup * blockSize)
+            if self.size < minGroups * UInt64(blocksPerGroup) * UInt64(blockSize) {  // Bug #31
+                self.size = minGroups * UInt64(blocksPerGroup) * UInt64(blockSize)
                 let pos = self.pos
                 guard lseek(self.handle.fileDescriptor, off_t(self.size - 1), 0) == self.size - 1 else {
                     throw Error.cannotResizeFS(self.size)
@@ -699,9 +712,15 @@ extension EXT4 {
                     for i in 0...usedGroupDescriptorBlocks {
                         bitmap[Int(i / 8)] |= 1 << (i % 8)
                     }
-                    for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
-                        bitmap[Int(i / 8)] &= ~(1 << (i % 8))
-                        blocks -= 1
+                    // Bug #20 (HIGH): The original range usedGroupDescriptorBlocks+1...self.groupDescriptorBlocks
+                    // crashed with "Range requires lowerBound <= upperBound" when all descriptor blocks were used
+                    // (lower > upper). Fixed by guarding that the range is non-empty first.
+                    // Same fix: sonnet-bulk, sonnet-1m. All other branches can crash here.
+                    if usedGroupDescriptorBlocks + 1 <= self.groupDescriptorBlocks {
+                        for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
+                            bitmap[Int(i / 8)] &= ~(1 << (i % 8))
+                            blocks -= 1
+                        }
                     }
                 }
 
@@ -755,6 +774,11 @@ extension EXT4 {
                     }
                 }
 
+                // Bug #22 (HIGH, 2 parts): The freeBlocks variable computed with careful edge-case logic below
+                // was never used; a simpler freeBlocksCount = blocksPerGroup - blocks ignored those
+                // edge cases (wrong for small or last-group filesystems) and was written to the
+                // group descriptor instead. Fixed by using freeBlocks in the group descriptor.
+                // Same fix: sonnet-1m-bulk, sonnet-fix-bulk. All other branches write wrong counts.
                 var freeBlocks: UInt32 = UInt32(self.blocksPerGroup)
                 if freeBlocks < blocks {
                     freeBlocks = 0
@@ -771,7 +795,6 @@ extension EXT4 {
                 let blockBitmap = UInt64(bitmapOffset + 2 * group)
                 let inodeBitmap = UInt64(bitmapOffset + 2 * group + 1)
                 let inodeTable = inodeTableOffset + UInt64(group * inodeTableSizePerGroup)
-                let freeBlocksCount = UInt32(self.blocksPerGroup - blocks)
                 let freeInodesCount = UInt32(blockGroupSize.inodesPerGroup - inodes)
                 groupDescriptors.append(
                     // low bits
@@ -779,7 +802,8 @@ extension EXT4 {
                         blockBitmapLow: blockBitmap.lo,  // address of block bitmap
                         inodeBitmapLow: inodeBitmap.lo,  // address of inode bitmap
                         inodeTableLow: inodeTable.lo,  // address of inode table for this group
-                        freeBlocksCountLow: freeBlocksCount.lo,
+                        // Bug #22
+                        freeBlocksCountLow: freeBlocks.lo,
                         freeInodesCountLow: freeInodesCount.lo,
                         usedDirsCountLow: dirs.lo,
                         flags: 0x0000,
@@ -805,13 +829,21 @@ extension EXT4 {
             }
             for group in blockGroupSize.blockGroups..<totalGroups.lo {
                 var blocksInGroup = UInt32(self.blocksPerGroup)
-                if group == totalGroups.lo {
+                // Bug #19 (HIGH, 2 parts): Condition was group == totalGroups.lo (strict equality); inside the
+                // exclusive-upper-bound range ..<totalGroups.lo this is never true, so the last block
+                // group's partial bitmap was never written (blocksInGroup stayed at blocksPerGroup).
+                // Fixed to totalGroups.lo - 1. Same fix: sonnet-bulk, sonnet-1m-bulk.
+                // All other branches have the dead condition — last block group bitmap is always wrong.
+                if group == totalGroups.lo - 1 {
                     if UInt64(self.size / UInt64(self.blockSize)) < self.blocksPerGroup {
                         break
                     }
-                    blocksInGroup = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
-                    if blocksInGroup == 0 {
-                        break
+                    // blocksInGroup == 0 means the last group is a full group (size is an exact
+                    // multiple of blocksPerGroup, which is always true after the alignment at
+                    // line ~677). Keep the default blocksInGroup = self.blocksPerGroup in that case.
+                    let rem = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
+                    if rem != 0 {
+                        blocksInGroup = rem
                     }
                 }
                 let blockBitmapOffset = UInt64(group * self.blocksPerGroup + inodeTableSizePerGroup)
@@ -838,7 +870,10 @@ extension EXT4 {
                 totalBlocks += (inodeTableSizePerGroup + 2)
                 try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
 
-                if group == totalGroups.lo {
+                // Only write the partial-group bitmap when the last group is genuinely partial
+                // (blocksInGroup < self.blocksPerGroup). When it equals self.blocksPerGroup the
+                // group is full and the standard blockBitmap written below is correct.
+                if group == totalGroups.lo - 1 && blocksInGroup != self.blocksPerGroup {
                     var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
                     for i in blocksInGroup..<UInt32(self.blocksPerGroup) {
                         blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
@@ -866,16 +901,22 @@ extension EXT4 {
             try self.seek(block: 0)
             try self.handle.write(contentsOf: Array<UInt8>.init(repeating: 0, count: 1024))
 
-            let computedInodes = totalGroups * blockGroupSize.inodesPerGroup
-            var blocksCount = totalGroups * self.blocksPerGroup
-            while blocksCount < totalBlocks {
+            // Bug #31 (MEDIUM, 3 parts): Mixed UInt64/UInt32 arithmetic in close() previously relied on
+            // custom operators from Integer+Extensions.swift (e.g. UInt64 * UInt32 = UInt64,
+            // UInt64 / UInt32 = UInt32). Comparisons like blocksCount < totalBlocks had
+            // implicit type coercions that could silently truncate via .lo. Fixed by adding
+            // explicit UInt64(...) casts at each operation and comparison.
+            // Same fix: sonnet-bulk, sonnet-1m-bulk. All other branches use custom operators.
+            let computedInodes = totalGroups * UInt64(blockGroupSize.inodesPerGroup)
+            var blocksCount = totalGroups * UInt64(self.blocksPerGroup)
+            while blocksCount < UInt64(totalBlocks) {
                 blocksCount = UInt64(totalBlocks)
             }
             let totalFreeBlocks: UInt64
-            if totalBlocks > blocksCount {
+            if UInt64(totalBlocks) > blocksCount {
                 totalFreeBlocks = 0
             } else {
-                totalFreeBlocks = blocksCount - totalBlocks
+                totalFreeBlocks = blocksCount - UInt64(totalBlocks)
             }
             var superblock = SuperBlock()
             superblock.inodesCount = computedInodes.lo
@@ -886,8 +927,14 @@ extension EXT4 {
             let freeInodesCount = computedInodes.lo - totalInodes
             superblock.freeInodesCount = freeInodesCount
             superblock.firstDataBlock = 0
-            superblock.logBlockSize = 2
-            superblock.logClusterSize = 2
+            // Bug #30 (MEDIUM): superblock.logBlockSize was hardcoded to 2, which is only correct
+            // for 4096-byte blocks. Computed dynamically as log2(blockSize) - 10 per ext4 spec.
+            // Same fix: sonnet-bulk and sonnet-1m (use trailingZeroBitCount variant, also correct).
+            // This branch uses floating-point log2; trailingZeroBitCount avoids FP and is cleaner.
+            // All other branches hardcode 2 — wrong for any block size other than 4096.
+            let logBlockSize = UInt32(log2(Double(self.blockSize))) - 10
+            superblock.logBlockSize = logBlockSize
+            superblock.logClusterSize = logBlockSize
             superblock.blocksPerGroup = self.blocksPerGroup
             superblock.clustersPerGroup = self.blocksPerGroup
             superblock.inodesPerGroup = blockGroupSize.inodesPerGroup
@@ -951,8 +998,12 @@ extension EXT4 {
                 try self.handle.write(
                     contentsOf: Array<UInt8>.init(repeating: 0, count: Int(EXT4.InodeSize) - inodeSize))
             }
+            // Bug #21 (HIGH): Used Darwin-only uint32 C alias (compile error on Linux) and
+            // UInt32 * UInt32 multiplication (overflow at ~16.7M inodes). Fixed to UInt64 arithmetic.
+            // Same fix: sonnet, sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-1m, sonnet-fix, sonnet-fix-bulk.
+            // opus, opus-bulk, opus-1m-bulk still use UInt32 — will crash on large filesystems.
             let tableSize: UInt64 = UInt64(EXT4.InodeSize) * blockGroups * inodesPerGroup
-            let rest = tableSize - uint32(self.inodes.count) * EXT4.InodeSize
+            let rest = tableSize - UInt64(self.inodes.count) * EXT4.InodeSize
             let zeroBlock = Array<UInt8>.init(repeating: 0, count: Int(self.blockSize))
             for _ in 0..<(rest / self.blockSize) {
                 try self.handle.write(contentsOf: zeroBlock)
@@ -1101,7 +1152,13 @@ extension EXT4 {
                     }
                 }
             case 5..<4 * UInt32(extentsPerBlock) + 1:
-                let extentBlocks = numExtents / extentsPerBlock + 1
+                // Bug #18 (HIGH): numExtents / extentsPerBlock + 1 always added 1 even when evenly
+                // divisible, creating an extra empty leaf block; leafNode.leaves.last! then
+                // force-unwrapped nil and crashed. Fixed to proper ceiling division.
+                // Same fix: sonnet, sonnet-1m, sonnet-1m-bulk.
+                // sonnet-bulk, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk
+                // still use + 1 — crash whenever numExtents is a multiple of extentsPerBlock.
+                let extentBlocks = (numExtents + extentsPerBlock - 1) / extentsPerBlock
                 usedBlocks += extentBlocks
                 let extentHeader = ExtentHeader(
                     magic: EXT4.ExtentHeaderMagic,
@@ -1133,9 +1190,16 @@ extension EXT4 {
                     )
                     var leafNode = ExtentLeafNode(header: leafHeader, leaves: [])
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
+                    // Bug #2 (CRITICAL): Previously passed start: blocks.start + offset; inside
+                    // fillExtents extentStart = start + extentBlock where extentBlock already
+                    // incorporates offset (i * extentsPerBlock * MaxBlocksPerExtent), so offset was
+                    // double-counted and every extent in depth-1 trees pointed to a wrong block.
+                    // Fixed by passing start: blocks.start. Same fix: sonnet, sonnet-bulk, sonnet-1m,
+                    // sonnet-1m-bulk, opus, sonnet-fix.
+                    // opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix-bulk still double-add offset.
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
@@ -1227,9 +1291,30 @@ extension EXT4 {
             left = left - rl
         }
 
+        // Bug #34 (MEDIUM): The guard if left < 8 { return } exited without writing anything,
+        // leaving the file handle short of the block boundary. Two corruption scenarios:
+        // (a) Mid-stream flush (called from writeDirEntry): next entry written 4 bytes before the
+        //     block boundary, corrupting data across two blocks.
+        // (b) Final flush (called from commit): endBlock == startBlock → directory size == 0,
+        //     directory invisible to kernel → builder VM hangs waiting for buildkitd.
+        // Also: if left < 4 threw noSpaceForTrailingDEntry for the valid left == 8 case (after
+        // writing the 8-byte header, left becomes 0, which triggered the throw).
+        // Fixed by writing zeros when left < headerSize to advance position to block boundary,
+        // and removing the spurious throw. Bug #8 altered which directories hit left == 4,
+        // converting a pre-existing latent crash into this hang.
+        // sonnet-1m-bulk has a similar fix but with a bare return (no zeros) — same corruption.
+        // All other branches lack the fix entirely.
+        // Conclusion: writing zeros is the only correct approach; bare return still corrupts the fs.
         private func finishDirEntryBlock(_ left: inout Int) throws {
             defer { left = Int(self.blockSize) }
             if left <= 0 {
+                return
+            }
+            let headerSize = MemoryLayout<DirectoryEntry>.size
+            if left < headerSize {
+                // Not enough space for a directory entry header.
+                // Write zeros to advance the file position to the block boundary.
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: left))
                 return
             }
             let entry = DirectoryEntry(
@@ -1241,11 +1326,10 @@ extension EXT4 {
             try withUnsafeLittleEndianBytes(of: entry) { bytes in
                 try self.handle.write(contentsOf: bytes)
             }
-            left = left - MemoryLayout<DirectoryEntry>.size
-            if left < 4 {
-                throw Error.noSpaceForTrailingDEntry
+            left = left - headerSize
+            if left > 0 {
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: left))
             }
-            try self.handle.write(contentsOf: [UInt8](repeating: 0, count: Int(left)))
         }
 
         public enum Error: Swift.Error, CustomStringConvertible, Sendable, Equatable {
@@ -1322,10 +1406,21 @@ extension Date {
             return 0x8000_0000
         }
 
-        if s > 0x3_7fff_ffff {
-            return 0x3_7fff_ffff
+        // Bug #23 (HIGH): Upper clamp used 0x3_7fff_ffff instead of the correct EXT4 34-bit
+        // seconds field maximum 0x3_ffff_ffff (2^34 − 1). Values between these two constants
+        // passed unchecked, writing bits above bit 33 and corrupting the nanosecond field.
+        // Same fix: sonnet-fix.
+        if s > 0x3_ffff_ffff {
+            return 0x3_ffff_ffff
         }
 
+        // Bug #1 (CRITICAL): UInt64(s) traps with a Swift runtime precondition failure when s is
+        // negative (pre-1970 dates), e.g. from archives with zeroed timestamps. The < -0x8000_0000
+        // clamp above only catches very early dates; values in (-2^31, 0) reached UInt64() and crashed.
+        // Fixed by guarding s >= 0 before the UInt64 conversion.
+        // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+        // sonnet-bulk and sonnet-1m-bulk omit this guard — still crash on s in (-2^31, 0).
+        guard s >= 0 else { return 0 }
         let seconds = UInt64(s)
         let nanoseconds = UInt64(self.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
 

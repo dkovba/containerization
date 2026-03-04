@@ -182,12 +182,18 @@ extension Hardlinks {
             return nil
         }
         var next = target
-        let visited: Set<FilePath> = [next]
+        // Bug #9 (HIGH): visited was an immutable let; only direct self-loops (A→A) were caught
+        // because visited.insert(next) was silently a no-op. Longer cycles (A→B→C→B) looped
+        // indefinitely, hanging the process. Fixed to var with insert in each iteration.
+        // Same fix: sonnet, sonnet-bulk, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk,
+        // sonnet-fix, sonnet-fix-bulk. Only sonnet-1m-bulk still has the immutable set.
+        var visited: Set<FilePath> = [next]
         while let item = self[next] {
             if visited.contains(item) {
                 throw UnpackError.circularLinks
             }
             next = item
+            visited.insert(next)
         }
         return next
     }

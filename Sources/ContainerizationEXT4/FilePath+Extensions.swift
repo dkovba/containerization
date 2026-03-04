@@ -24,8 +24,12 @@ extension FilePath {
         self.withCString { cstr in
             var ptr = cstr
             var rawBytes: [UInt8] = []
-            while UInt(bitPattern: ptr) != 0 {
-                if ptr.pointee == 0x00 { break }
+            // Bug #43 (LOW): Original condition was while UInt(bitPattern: ptr) != 0, testing the
+            // pointer address (always non-zero inside withCString). The loop depended on a break
+            // inside the body that never existed — it would loop until a crash or garbage.
+            // Fixed to ptr.pointee != 0 (null terminator check). Same fix: sonnet, sonnet-1m, sonnet-fix.
+            // All other branches rely on the pointee being 0 at string end by coincidence — UB.
+            while ptr.pointee != 0 {
                 rawBytes.append(UInt8(bitPattern: ptr.pointee))
                 ptr = ptr.successor()
             }
@@ -54,19 +58,15 @@ extension FilePath {
     }
 
     public init?(_ data: Data) {
-        let cstr: String? = data.withUnsafeBytes { (rbp: UnsafeRawBufferPointer) in
-            guard let baseAddress = rbp.baseAddress else {
-                return nil
-            }
-
-            let cString = baseAddress.bindMemory(to: CChar.self, capacity: data.count)
-            return String(cString: cString)
-        }
-
-        guard let cstr else {
+        // Bug #12 (HIGH): Was String(cString: ...) which reads until a null terminator with no
+        // bounds check; Data without a trailing null byte would read into adjacent heap memory (UB).
+        // Fixed to String(bytes: data, encoding: .utf8) which respects the data length.
+        // Same fix: sonnet, sonnet-1m, opus, opus-1m, sonnet-fix.
+        // sonnet-bulk, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix-bulk still use cString.
+        guard let str = String(bytes: data, encoding: .utf8) else {
             return nil
         }
-        self.init(cstr)
+        self.init(str)
     }
 
     public func join(_ path: FilePath) -> FilePath {

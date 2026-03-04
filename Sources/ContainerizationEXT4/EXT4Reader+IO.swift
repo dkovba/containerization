@@ -41,6 +41,10 @@ extension EXT4 {
 
 // MARK: - Public API
 
+// Bug #45 (LOW, 2 parts): Private methods walkWithParents() and walk() were defined here but never called;
+// resolvePath implements its own inline traversal. Both methods have been removed.
+// Same fix: sonnet-1m. All other branches still carry the dead code.
+
 extension EXT4.EXT4Reader {
     /// Return true if a path exists (file or directory) in this ext4 device.
     public func exists(_ path: FilePath, followSymlinks: Bool = true) -> Bool {
@@ -225,10 +229,6 @@ extension EXT4.EXT4Reader {
 
             while remaining > 0 && bytesWritten < desiredBytes {
                 let chunk = min(desiredBytes - bytesWritten, Int(min(remaining, UInt64(1 << 20))))
-                let dest = UnsafeMutableRawBufferPointer(
-                    start: base.advanced(by: bytesWritten),
-                    count: chunk
-                )
 
                 do {
                     guard let data = try self.handle.read(upToCount: chunk) else {
@@ -240,7 +240,15 @@ extension EXT4.EXT4Reader {
                     }
 
                     // Copy the data to the destination buffer
+                    // Bug #38 (MEDIUM, 2 parts): dest was sized to chunk (the requested read size) before
+                    // reading; on a partial read, dest contained uninitialized trailing bytes that
+                    // were included in output. Fixed by sizing dest to sourceBytes.count after read.
+                    // Same fix: opus-1m. All other branches may include garbage bytes on partial reads.
                     data.withUnsafeBytes { sourceBytes in
+                        let dest = UnsafeMutableRawBufferPointer(
+                            start: base.advanced(by: bytesWritten),
+                            count: sourceBytes.count  // Bug #38: was count: chunk (before data was read)
+                        )
                         dest.copyMemory(from: UnsafeRawBufferPointer(sourceBytes))
                     }
 
@@ -356,6 +364,11 @@ extension EXT4.EXT4Reader {
                     // Absolute symlink: reset to root
                     current = EXT4.RootInode
                     parentStack = []
+                    // Bug #28 (MEDIUM): visitedInodes was not reset after resetting to root; a path
+                    // that revisited an inode via a different route after an absolute symlink falsely
+                    // triggered symlinkLoop. Fixed by resetting visitedInodes with current and parentStack.
+                    // Same fix: sonnet. All other branches give false symlinkLoop errors on some paths.
+                    visitedInodes = []
                     // Replace the symlink component with target components + remaining path
                     components = targetComponents + Array(components[(componentIndex + 1)...])
                     componentIndex = 0  // Start from beginning with new path
@@ -376,70 +389,6 @@ extension EXT4.EXT4Reader {
         // All components processed - return final inode
         let finalInode = try getInode(number: current)
         return ResolvedPath(inodeNum: current, inode: finalInode)
-    }
-
-    /// Walk a sequence of path components from a starting inode with parent tracking.
-    /// Returns the final inode and updated parent stack.
-    private func walkWithParents(
-        current start: EXT4.InodeNumber,
-        components: [String],
-        parentStack initialStack: [EXT4.InodeNumber]
-    ) throws -> (EXT4.InodeNumber, [EXT4.InodeNumber]) {
-        var current = start
-        var parentStack = initialStack
-
-        if components.isEmpty { return (current, parentStack) }
-
-        for name in components {
-            if name == "." {
-                continue
-            }
-
-            if name == ".." {
-                // Handle parent directory traversal with proper tracking
-                if current == EXT4.RootInode {
-                    // At root, ".." points to itself (POSIX behavior)
-                    continue
-                }
-
-                // Use parent stack if available for accurate traversal
-                if !parentStack.isEmpty {
-                    current = parentStack.removeLast()
-                } else {
-                    // No parent tracking available - look up ".." entry in filesystem
-                    // This happens when we start traversal from a non-root inode
-                    let entries = try children(of: current)
-                    if let parent = entries.first(where: { $0.0 == ".." })?.1 {
-                        current = parent
-                    }
-                }
-                continue
-            }
-
-            // Regular component: verify current is a directory before traversing
-            let currentInode = try getInode(number: current)
-            guard currentInode.mode.isDir() else {
-                throw EXT4.PathIOError.notADirectory(name)
-            }
-
-            // Look up child in current directory
-            let entries = try children(of: current)
-            guard let child = entries.first(where: { $0.0 == name }) else {
-                throw EXT4.PathIOError.notFound(name)
-            }
-
-            // Push current to parent stack before descending
-            parentStack.append(current)
-            current = child.1
-        }
-
-        return (current, parentStack)
-    }
-
-    /// Walk a sequence of path components from a starting inode.
-    private func walk(current start: EXT4.InodeNumber, components: [String]) throws -> EXT4.InodeNumber {
-        let (result, _) = try walkWithParents(current: start, components: components, parentStack: [])
-        return result
     }
 
     /// Normalize a path into components, handling absolute and relative paths.
@@ -563,4 +512,6 @@ extension EXT4.EXT4Reader {
         let hi = UInt64(inode.sizeHigh)
         return lo | (hi << 32)
     }
+
+    // Bug #45: walkWithParents() and walk() were removed from here.
 }

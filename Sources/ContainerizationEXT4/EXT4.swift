@@ -113,7 +113,8 @@ import Foundation
 
  ### Inode Bitmap
 
- A sequence of bits, where each bit represents a inode in the block group. Since
+ // Bug #49 (LOW): Was "a inode" (missing 'n'). Fixed to "an inode". Same fix: opus-1m.
+ A sequence of bits, where each bit represents an inode in the block group. Since
  inodes per group is a fixed number, this bitmap is made to be of sufficient length
  to accommodate that many inodes
 
@@ -208,9 +209,10 @@ import Foundation
     | +-------------------+ |
     +-----------------------+
 
+ // Bug #48 (LOW): Was "directory entrees" (culinary term). Fixed to "directory entries". Same fix: opus-1m.
  ## Directory entries
 
- The data blocks for directory inodes point to a list of directory entrees. Each entry
+ The data blocks for directory inodes point to a list of directory entries. Each entry
  consists of only a name and inode number. The name and inode number correspond to the
  name and inode number of the children of the directory
 

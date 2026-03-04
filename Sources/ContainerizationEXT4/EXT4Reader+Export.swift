@@ -71,11 +71,23 @@ extension EXT4.EXT4Reader {
             let pathStr = path.description
             entry.path = pathStr
             entry.size = Int64(size)
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            // Bug #13 (HIGH, 2 parts): Only the low 16 bits of UID/GID were used; UIDs and GIDs above 65535
+            // were silently truncated to wrong IDs. Fixed by combining the high and low fields.
+            // Same fix: opus, opus-1m. All other branches truncate high-range UIDs/GIDs.
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)
+            // Bug #4 (CRITICAL, 2 parts): creationDate was set from ctime/ctimeExtra (inode change time,
+            // updated on every metadata modification) instead of crtime/crtimeExtra (birth time,
+            // set once at creation). Fixed to use the correct crtime fields.
+            // Same fix: opus, sonnet-fix. All other branches export the wrong creation date.
+            // Bug #3 (CRITICAL, 2 parts): Shifts like inode.ctimeExtra << 32 performed the shift as UInt32,
+            // truncating to 0. Fixed by casting to UInt64 before shifting.
+            // Same fix: sonnet, sonnet-1m, opus, opus-1m, sonnet-fix-bulk.
+            // sonnet-bulk, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix lose nanoseconds
+            // and post-2038 range on all three timestamps.
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.crtimeExtra) << 32) | UInt64(inode.crtime))
+            entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
+            entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             entry.xattrs = xattrs
 
             if mode.isDir() {
@@ -130,7 +142,12 @@ extension EXT4.EXT4Reader {
                 entry.fileType = .symbolicLink
                 if size < 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
-                    entry.symlinkTarget = String(bytes: linkBytes, encoding: .utf8) ?? ""
+                    // Bug #11 (HIGH): tupleToArray(inode.block) returned all 60 bytes including null
+                    // padding after the target string. The symlink target included null bytes, making
+                    // path resolution fail. Fixed with .prefix(Int(size)).
+                    // Same fix: sonnet, sonnet-1m, opus, opus-1m, opus-1m-bulk, sonnet-fix-bulk.
+                    // sonnet-bulk, sonnet-1m-bulk, opus-bulk, sonnet-fix still return null-padded targets.
+                    entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
                     if let block = item.blocks {
                         try self.seek(block: block.start)
@@ -154,11 +171,11 @@ extension EXT4.EXT4Reader {
             entry.path = path.description
             entry.hardlink = targetPath.description
             entry.permissions = inode.mode
-            entry.group = gid_t(inode.gid)
-            entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
-            entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
-            entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            entry.group = gid_t(inode.gidHigh) << 16 | gid_t(inode.gid)  // Bug #13
+            entry.owner = uid_t(inode.uidHigh) << 16 | uid_t(inode.uid)  // Bug #13
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.crtimeExtra) << 32) | UInt64(inode.crtime))  // Bug #4, Bug #3
+            entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))  // Bug #3
+            entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))  // Bug #3
             try writer.writeEntry(entry: entry, data: nil)
         }
         try writer.finishEncoding()
@@ -170,7 +187,10 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readInlineExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        // Bug #10 (HIGH, 2 parts): Was buffer[0...4] (closed range, 5 bytes); loading UInt32 from a 5-byte
+        // slice is an out-of-bounds access on a 4-byte buffer. Fixed to buffer[0..<4] (4 bytes).
+        // All analysis branches have this fix.
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
@@ -183,17 +203,15 @@ extension EXT4.EXT4Reader {
     }
 
     public static func readBlockExtendedAttributes(from buffer: [UInt8]) throws -> [EXT4.ExtendedAttribute] {
-        let header = UInt32(littleEndian: buffer[0...4].withUnsafeBytes { $0.load(as: UInt32.self) })
+        // Bug #10
+        let header = UInt32(littleEndian: buffer[0..<4].withUnsafeBytes { $0.load(as: UInt32.self) })
         if header != EXT4.XAttrHeaderMagic {
             throw EXT4.FileXattrsState.Error.missingXAttrHeader
         }
 
         return try EXT4.FileXattrsState.read(buffer: [UInt8](buffer), start: 32, offset: 0)
     }
-
-    func seek(block: UInt32) throws {
-        try self.handle.seek(toOffset: UInt64(block) * blockSize)
-    }
+    // Bug #29: seek(block:) removed from here; moved to EXT4+Reader.swift outside the macOS guard.
 }
 
 extension Date {

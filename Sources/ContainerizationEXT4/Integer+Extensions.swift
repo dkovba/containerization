@@ -33,8 +33,12 @@ extension UInt64 {
         lhs % UInt64(rhs)
     }
 
+    // Bug #32 (MEDIUM): Original used (lhs / UInt64(rhs)).lo which silently discards the upper
+    // 32 bits; if the quotient exceeds UInt32.max the result is a wrong small value with no trap.
+    // Fixed to UInt32(lhs / UInt64(rhs)), which traps visibly on overflow.
+    // Same fix: sonnet. All other branches use .lo — silent truncation on large quotients.
     public static func / (lhs: Self, rhs: UInt32) -> UInt32 {
-        (lhs / UInt64(rhs)).lo
+        UInt32(lhs / UInt64(rhs))
     }
 
     public static func * (lhs: Self, rhs: UInt32) -> UInt64 {
