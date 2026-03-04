@@ -1133,9 +1133,16 @@ extension EXT4 {
                     )
                     var leafNode = ExtentLeafNode(header: leafHeader, leaves: [])
                     let offset = i * extentsPerBlock * EXT4.MaxBlocksPerExtent
+                    // Bug #2 (CRITICAL): Previously passed start: blocks.start + offset; inside
+                    // fillExtents extentStart = start + extentBlock where extentBlock already
+                    // incorporates offset (i * extentsPerBlock * MaxBlocksPerExtent), so offset was
+                    // double-counted and every extent in depth-1 trees pointed to a wrong block.
+                    // Fixed by passing start: blocks.start. Same fix: sonnet, sonnet-bulk, sonnet-1m,
+                    // sonnet-1m-bulk, opus, sonnet-fix.
+                    // opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix-bulk still double-add offset.
                     fillExtents(
                         node: &leafNode, numExtents: extentsInBlock, numBlocks: dataBlocks,
-                        start: blocks.start + offset,
+                        start: blocks.start,
                         offset: offset)
                     try withUnsafeLittleEndianBytes(of: leafNode.header) { bytes in
                         try self.handle.write(contentsOf: bytes)
