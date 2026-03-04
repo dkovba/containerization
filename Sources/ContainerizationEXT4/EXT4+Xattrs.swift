@@ -176,11 +176,16 @@ extension EXT4 {
                 idx += 1
             }
             var attributes = self.blockAttributes
+            // Bug #5 (CRITICAL): Sort closure used || to chain criteria; when a.index > b.index but
+            // a.name.count < b.name.count it returned true, violating strict weak ordering and producing
+            // undefined sort behaviour (crash or wrong order with different stdlib versions).
+            // Fixed to proper lexicographic chaining with early returns on inequality.
+            // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix, sonnet-fix-bulk.
+            // sonnet-bulk and sonnet-1m-bulk still use || — undefined sort order, potential crash.
             attributes.sort(by: {
-                if ($0.index < $1.index) || ($0.name.count < $1.name.count) || ($0.name < $1.name) {
-                    return true
-                }
-                return false
+                if $0.index != $1.index { return $0.index < $1.index }
+                if $0.name.count != $1.name.count { return $0.name.count < $1.name.count }
+                return $0.name < $1.name
             })
             try Self.write(buffer: &buffer, attrs: attributes, start: UInt16(idx), delta: UInt16(idx), inline: false)
         }
