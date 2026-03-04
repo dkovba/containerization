@@ -710,9 +710,15 @@ extension EXT4 {
                     for i in 0...usedGroupDescriptorBlocks {
                         bitmap[Int(i / 8)] |= 1 << (i % 8)
                     }
-                    for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
-                        bitmap[Int(i / 8)] &= ~(1 << (i % 8))
-                        blocks -= 1
+                    // Bug #20 (HIGH): The original range usedGroupDescriptorBlocks+1...self.groupDescriptorBlocks
+                    // crashed with "Range requires lowerBound <= upperBound" when all descriptor blocks were used
+                    // (lower > upper). Fixed by guarding that the range is non-empty first.
+                    // Same fix: sonnet-bulk, sonnet-1m. All other branches can crash here.
+                    if usedGroupDescriptorBlocks + 1 <= self.groupDescriptorBlocks {
+                        for i in usedGroupDescriptorBlocks + 1...self.groupDescriptorBlocks {
+                            bitmap[Int(i / 8)] &= ~(1 << (i % 8))
+                            blocks -= 1
+                        }
                     }
                 }
 
