@@ -142,7 +142,12 @@ extension EXT4.EXT4Reader {
                 entry.fileType = .symbolicLink
                 if size < 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
-                    entry.symlinkTarget = String(bytes: linkBytes, encoding: .utf8) ?? ""
+                    // Bug #11 (HIGH): tupleToArray(inode.block) returned all 60 bytes including null
+                    // padding after the target string. The symlink target included null bytes, making
+                    // path resolution fail. Fixed with .prefix(Int(size)).
+                    // Same fix: sonnet, sonnet-1m, opus, opus-1m, opus-1m-bulk, sonnet-fix-bulk.
+                    // sonnet-bulk, sonnet-1m-bulk, opus-bulk, sonnet-fix still return null-padded targets.
+                    entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
                     if let block = item.blocks {
                         try self.seek(block: block.start)
