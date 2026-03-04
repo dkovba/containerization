@@ -816,13 +816,21 @@ extension EXT4 {
             }
             for group in blockGroupSize.blockGroups..<totalGroups.lo {
                 var blocksInGroup = UInt32(self.blocksPerGroup)
-                if group == totalGroups.lo {
+                // Bug #19 (HIGH, 2 parts): Condition was group == totalGroups.lo (strict equality); inside the
+                // exclusive-upper-bound range ..<totalGroups.lo this is never true, so the last block
+                // group's partial bitmap was never written (blocksInGroup stayed at blocksPerGroup).
+                // Fixed to totalGroups.lo - 1. Same fix: sonnet-bulk, sonnet-1m-bulk.
+                // All other branches have the dead condition — last block group bitmap is always wrong.
+                if group == totalGroups.lo - 1 {
                     if UInt64(self.size / UInt64(self.blockSize)) < self.blocksPerGroup {
                         break
                     }
-                    blocksInGroup = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
-                    if blocksInGroup == 0 {
-                        break
+                    // blocksInGroup == 0 means the last group is a full group (size is an exact
+                    // multiple of blocksPerGroup, which is always true after the alignment at
+                    // line ~677). Keep the default blocksInGroup = self.blocksPerGroup in that case.
+                    let rem = UInt32((self.size / UInt64(self.blockSize)) % UInt64(self.blocksPerGroup))
+                    if rem != 0 {
+                        blocksInGroup = rem
                     }
                 }
                 let blockBitmapOffset = UInt64(group * self.blocksPerGroup + inodeTableSizePerGroup)
@@ -849,7 +857,10 @@ extension EXT4 {
                 totalBlocks += (inodeTableSizePerGroup + 2)
                 try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
 
-                if group == totalGroups.lo {
+                // Only write the partial-group bitmap when the last group is genuinely partial
+                // (blocksInGroup < self.blocksPerGroup). When it equals self.blocksPerGroup the
+                // group is full and the standard blockBitmap written below is correct.
+                if group == totalGroups.lo - 1 && blocksInGroup != self.blocksPerGroup {
                     var blockBitmapLo: [UInt8] = .init(repeating: 0, count: Int(self.blocksPerGroup) / 8)
                     for i in blocksInGroup..<UInt32(self.blocksPerGroup) {
                         blockBitmapLo[Int(i) / 8] |= 1 << (i % 8)
