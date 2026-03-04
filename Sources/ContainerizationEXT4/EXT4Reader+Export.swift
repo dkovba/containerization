@@ -76,12 +76,16 @@ extension EXT4.EXT4Reader {
             entry.creationDate = Date(fsTimestamp: UInt64((inode.ctimeExtra << 32) | inode.ctime))
             entry.modificationDate = Date(fsTimestamp: UInt64((inode.mtimeExtra << 32) | inode.mtime))
             entry.contentAccessDate = Date(fsTimestamp: UInt64((inode.atimeExtra << 32) | inode.atime))
+            // Bug #4 (CRITICAL, 2 parts): creationDate was set from ctime/ctimeExtra (inode change time,
+            // updated on every metadata modification) instead of crtime/crtimeExtra (birth time,
+            // set once at creation). Fixed to use the correct crtime fields.
+            // Same fix: opus, sonnet-fix. All other branches export the wrong creation date.
             // Bug #3 (CRITICAL, 2 parts): Shifts like inode.ctimeExtra << 32 performed the shift as UInt32,
             // truncating to 0. Fixed by casting to UInt64 before shifting.
             // Same fix: sonnet, sonnet-1m, opus, opus-1m, sonnet-fix-bulk.
             // sonnet-bulk, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix lose nanoseconds
             // and post-2038 range on all three timestamps.
-            entry.creationDate = Date(fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.crtimeExtra) << 32) | UInt64(inode.crtime))
             entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))
             entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))
             entry.xattrs = xattrs
@@ -164,7 +168,7 @@ extension EXT4.EXT4Reader {
             entry.permissions = inode.mode
             entry.group = gid_t(inode.gid)
             entry.owner = uid_t(inode.uid)
-            entry.creationDate = Date(fsTimestamp: (UInt64(inode.ctimeExtra) << 32) | UInt64(inode.ctime))  // Bug #3
+            entry.creationDate = Date(fsTimestamp: (UInt64(inode.crtimeExtra) << 32) | UInt64(inode.crtime))  // Bug #4, Bug #3
             entry.modificationDate = Date(fsTimestamp: (UInt64(inode.mtimeExtra) << 32) | UInt64(inode.mtime))  // Bug #3
             entry.contentAccessDate = Date(fsTimestamp: (UInt64(inode.atimeExtra) << 32) | UInt64(inode.atime))  // Bug #3
             try writer.writeEntry(entry: entry, data: nil)
