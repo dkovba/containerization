@@ -538,11 +538,17 @@ extension EXT4 {
         let checksum: UInt32
     }
 
+    // Bug #6 (CRITICAL, 2 parts): dotName and dotDotName were declared as [UInt8] (heap-allocated Array).
+    // Swift Array is a reference type wrapper; MemoryLayout<DirectoryTreeRoot>.size and
+    // withUnsafeBytes serialize the Array's pointer/count metadata rather than the inline bytes,
+    // producing a completely wrong on-disk layout. Fixed to fixed-size tuples.
+    // Same fix: sonnet, sonnet-1m, opus, opus-1m, sonnet-fix (XAttrHeader.reserved also fixed here).
+    // sonnet-bulk, sonnet-1m-bulk, opus-bulk, sonnet-fix-bulk still use Array — corrupt on-disk layout.
     struct DirectoryTreeRoot {
         let dot: DirectoryEntry
-        let dotName: [UInt8]
+        let dotName: (UInt8, UInt8, UInt8, UInt8)
         let dotDot: DirectoryEntry
-        let dotDotName: [UInt8]
+        let dotDotName: (UInt8, UInt8, UInt8, UInt8)
         let reservedZero: UInt32
         let hashVersion: UInt8
         let infoLength: UInt8
@@ -590,7 +596,7 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        let reserved: (UInt32, UInt32, UInt32)  // Bug #6
     }
 
 }
