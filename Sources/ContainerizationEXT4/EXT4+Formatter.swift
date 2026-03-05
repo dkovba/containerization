@@ -606,16 +606,18 @@ extension EXT4 {
         //  The function performs any necessary final steps to ensure the integrity and consistency
         //  of the ext4 filesystem before it can be mounted and used.
         public func close() throws {
-            var breathWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
+            // Bug #47 (LOW): Variable was named breathWiseChildTree (missing 'd', not a word).
+            // Renamed to breadthWiseChildTree. Same fix: opus-1m. All other branches retain the typo.
+            var breadthWiseChildTree: [(parent: Ptr<FileTree.FileTreeNode>?, child: Ptr<FileTree.FileTreeNode>)] = [
                 (nil, self.tree.root)
             ]
-            while !breathWiseChildTree.isEmpty {
-                let (parent, child) = breathWiseChildTree.removeFirst()
+            while !breadthWiseChildTree.isEmpty {
+                let (parent, child) = breadthWiseChildTree.removeFirst()
                 try self.commit(parent, child)  // commit directories iteratively
                 if child.pointee.link != nil {
                     continue
                 }
-                breathWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
+                breadthWiseChildTree.append(contentsOf: child.pointee.children.map { (child, $0) })
             }
             let blockGroupSize = optimizeBlockGroupLayout(blocks: self.currentBlock, inodes: UInt32(self.inodes.count))
             let inodeTableOffset = try self.commitInodeTable(
@@ -638,8 +640,8 @@ extension EXT4 {
             if diskSize < minimumDiskSize {  // for data + metadata
                 diskSize = minimumDiskSize
             }
-            if self.size < minimumDiskSize {
-                self.size = UInt64(minimumDiskSize) * self.blockSize
+            if self.size < UInt64(minimumDiskSize) * UInt64(self.blockSize) {
+                self.size = UInt64(minimumDiskSize) * UInt64(self.blockSize)
             }
             // number of blocks needed for group descriptors
             let groupDescriptorBlockCount: UInt32 = (blockGroupSize.blockGroups - 1) / self.groupsPerDescriptorBlock + 1
