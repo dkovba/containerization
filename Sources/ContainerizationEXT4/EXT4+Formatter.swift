@@ -1289,9 +1289,30 @@ extension EXT4 {
             left = left - rl
         }
 
+        // Bug #34 (MEDIUM): The guard if left < 8 { return } exited without writing anything,
+        // leaving the file handle short of the block boundary. Two corruption scenarios:
+        // (a) Mid-stream flush (called from writeDirEntry): next entry written 4 bytes before the
+        //     block boundary, corrupting data across two blocks.
+        // (b) Final flush (called from commit): endBlock == startBlock → directory size == 0,
+        //     directory invisible to kernel → builder VM hangs waiting for buildkitd.
+        // Also: if left < 4 threw noSpaceForTrailingDEntry for the valid left == 8 case (after
+        // writing the 8-byte header, left becomes 0, which triggered the throw).
+        // Fixed by writing zeros when left < headerSize to advance position to block boundary,
+        // and removing the spurious throw. Bug #8 altered which directories hit left == 4,
+        // converting a pre-existing latent crash into this hang.
+        // sonnet-1m-bulk has a similar fix but with a bare return (no zeros) — same corruption.
+        // All other branches lack the fix entirely.
+        // Conclusion: writing zeros is the only correct approach; bare return still corrupts the fs.
         private func finishDirEntryBlock(_ left: inout Int) throws {
             defer { left = Int(self.blockSize) }
             if left <= 0 {
+                return
+            }
+            let headerSize = MemoryLayout<DirectoryEntry>.size
+            if left < headerSize {
+                // Not enough space for a directory entry header.
+                // Write zeros to advance the file position to the block boundary.
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: left))
                 return
             }
             let entry = DirectoryEntry(
@@ -1303,11 +1324,10 @@ extension EXT4 {
             try withUnsafeLittleEndianBytes(of: entry) { bytes in
                 try self.handle.write(contentsOf: bytes)
             }
-            left = left - MemoryLayout<DirectoryEntry>.size
-            if left < 4 {
-                throw Error.noSpaceForTrailingDEntry
+            left = left - headerSize
+            if left > 0 {
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: left))
             }
-            try self.handle.write(contentsOf: [UInt8](repeating: 0, count: Int(left)))
         }
 
         public enum Error: Swift.Error, CustomStringConvertible, Sendable, Equatable {
