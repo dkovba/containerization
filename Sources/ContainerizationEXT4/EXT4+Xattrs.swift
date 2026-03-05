@@ -263,7 +263,11 @@ extension EXT4 {
             var i = start
             var attribs: [ExtendedAttribute] = []
             // 16 is the size of 1 XAttrEntry
-            while i + 16 < buffer.count {
+            // Bug #26 (MEDIUM): Loop condition was i + 16 < buffer.count (strict <), which skipped
+            // the last valid entry when exactly 16 bytes remained (i + 16 == buffer.count).
+            // Fixed to <=. Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix.
+            // sonnet-bulk, sonnet-1m-bulk, sonnet-fix-bulk still use < — last xattr silently dropped.
+            while i + 16 <= buffer.count {
                 let attributeStart = i
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
