@@ -18,7 +18,10 @@ import Foundation
 
 extension EXT4 {
     class Ptr<T> {
-        let underlying: UnsafeMutablePointer<T>
+        // Bug #44 (LOW): underlying had default internal access, allowing any code in the module to
+        // bypass the allocated/initialized safety guards and access the raw pointer directly.
+        // Fixed to private let. Same fix: sonnet-1m. All other branches leave it internal.
+        private let underlying: UnsafeMutablePointer<T>
         private var capacity: Int
         private var initialized: Bool
         private var allocated: Bool
