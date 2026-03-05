@@ -284,6 +284,13 @@ extension EXT4 {
                 let name = String(bytes: rawName, encoding: .ascii) ?? ""
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
+                // Bug #27 (MEDIUM): buffer[valueStart..<valueEnd] had no bounds check; a corrupted
+                // or truncated xattr block could produce valueEnd > buffer.count, causing a crash.
+                // Fixed by guarding valueEnd <= buffer.count. Only opus has this fix.
+                // All other branches crash on any xattr block with an out-of-range value offset.
+                guard valueEnd <= buffer.count else {
+                    break
+                }
                 let value = [UInt8](buffer[valueStart..<valueEnd])
                 let xattr = ExtendedAttribute(idx: xattrEntry.nameIndex, compressedName: name, value: value)
                 attribs.append(xattr)
