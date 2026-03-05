@@ -225,10 +225,6 @@ extension EXT4.EXT4Reader {
 
             while remaining > 0 && bytesWritten < desiredBytes {
                 let chunk = min(desiredBytes - bytesWritten, Int(min(remaining, UInt64(1 << 20))))
-                let dest = UnsafeMutableRawBufferPointer(
-                    start: base.advanced(by: bytesWritten),
-                    count: chunk
-                )
 
                 do {
                     guard let data = try self.handle.read(upToCount: chunk) else {
@@ -240,7 +236,15 @@ extension EXT4.EXT4Reader {
                     }
 
                     // Copy the data to the destination buffer
+                    // Bug #38 (MEDIUM, 2 parts): dest was sized to chunk (the requested read size) before
+                    // reading; on a partial read, dest contained uninitialized trailing bytes that
+                    // were included in output. Fixed by sizing dest to sourceBytes.count after read.
+                    // Same fix: opus-1m. All other branches may include garbage bytes on partial reads.
                     data.withUnsafeBytes { sourceBytes in
+                        let dest = UnsafeMutableRawBufferPointer(
+                            start: base.advanced(by: bytesWritten),
+                            count: sourceBytes.count  // Bug #38: was count: chunk (before data was read)
+                        )
                         dest.copyMemory(from: UnsafeRawBufferPointer(sourceBytes))
                     }
 
