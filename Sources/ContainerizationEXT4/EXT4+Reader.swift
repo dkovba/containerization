@@ -120,8 +120,13 @@ extension EXT4 {
         }
 
         private func readGroupDescriptor(_ number: UInt32) throws -> GroupDescriptor {
-            let bs = UInt64(1024 * (1 << _superBlock.logBlockSize))
-            let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)
+            // Bug #35 (MEDIUM): GDT offset was computed as blockSize + ..., which for 1024-byte blocks
+            // placed the GDT inside the superblock region. The correct formula per ext4 spec is
+            // (firstDataBlock + 1) * blockSize: block 0 for 4096-byte fs (firstDataBlock=0) or
+            // block 2 for 1024-byte fs (firstDataBlock=1). Fixed accordingly.
+            // Same fix: sonnet-1m. All other branches use the wrong offset for 1024-byte blocks.
+            let gdtOffset = (UInt64(_superBlock.firstDataBlock) + 1) * blockSize
+            let offset = gdtOffset + UInt64(number) * UInt64(self.groupDescriptorSize)
             try self.handle.seek(toOffset: offset)
             guard let data = try? self.handle.read(upToCount: MemoryLayout<EXT4.GroupDescriptor>.size) else {
                 throw EXT4.Error.couldNotReadGroup(number)
