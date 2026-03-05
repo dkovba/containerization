@@ -64,13 +64,17 @@ extension UnsafeRawBufferPointer {
     }
 }
 
-public enum Endianness {
+public enum Endianness: Sendable {  // Bug #36
     case little
     case big
 }
 
 // returns current endianness
-public var Endian: Endianness {
+// Bug #36 (MEDIUM, 2 parts): Endian was a computed var (using keyword `var`), calling CFByteOrderGetCurrent()
+// on every single access (every I/O operation). Endianness cannot change at runtime.
+// Fixed to a lazy let constant; Endianness also gains Sendable conformance (required by the global let).
+// Same fix: sonnet-1m. All other branches make redundant CoreFoundation calls on every read/write operation.
+public let Endian: Endianness = {
     switch CFByteOrderGetCurrent() {
     case CFByteOrder(CFByteOrderLittleEndian.rawValue):
         return .little
@@ -79,4 +83,4 @@ public var Endian: Endianness {
     default:
         fatalError("impossible")
     }
-}
+}()
