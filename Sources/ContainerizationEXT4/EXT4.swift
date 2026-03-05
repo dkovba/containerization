@@ -208,9 +208,10 @@ import Foundation
     | +-------------------+ |
     +-----------------------+
 
+ // Bug #48 (LOW): Was "directory entrees" (culinary term). Fixed to "directory entries". Same fix: opus-1m.
  ## Directory entries
 
- The data blocks for directory inodes point to a list of directory entrees. Each entry
+ The data blocks for directory inodes point to a list of directory entries. Each entry
  consists of only a name and inode number. The name and inode number correspond to the
  name and inode number of the children of the directory
 
