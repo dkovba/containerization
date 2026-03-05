@@ -24,8 +24,12 @@ extension FilePath {
         self.withCString { cstr in
             var ptr = cstr
             var rawBytes: [UInt8] = []
-            while UInt(bitPattern: ptr) != 0 {
-                if ptr.pointee == 0x00 { break }
+            // Bug #43 (LOW): Original condition was while UInt(bitPattern: ptr) != 0, testing the
+            // pointer address (always non-zero inside withCString). The loop depended on a break
+            // inside the body that never existed — it would loop until a crash or garbage.
+            // Fixed to ptr.pointee != 0 (null terminator check). Same fix: sonnet, sonnet-1m, sonnet-fix.
+            // All other branches rely on the pointee being 0 at string end by coincidence — UB.
+            while ptr.pointee != 0 {
                 rawBytes.append(UInt8(bitPattern: ptr.pointee))
                 ptr = ptr.successor()
             }
