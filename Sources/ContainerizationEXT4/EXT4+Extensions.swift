@@ -92,8 +92,11 @@ extension EXT4.XAttrEntry {
 }
 
 extension EXT4 {
+    // Bug #39 (LOW): Was implemented using Mirror reflection — slow, not type-safe, and field
+    // order is not guaranteed to match memory layout across Swift versions.
+    // Fixed to withUnsafeBytes(of: tuple) { Array($0) } which directly reads the memory layout.
+    // Same fix: opus-1m. All other branches use Mirror reflection.
     static func tupleToArray<T>(_ tuple: T) -> [UInt8] {
-        let reflection = Mirror(reflecting: tuple)
-        return reflection.children.compactMap { $0.value as? UInt8 }
+        withUnsafeBytes(of: tuple) { Array($0) }
     }
 }
