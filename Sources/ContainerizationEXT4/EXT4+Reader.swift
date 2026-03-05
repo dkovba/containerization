@@ -222,8 +222,13 @@ extension EXT4 {
             case 0:
                 // When depth is 0 the extent header is followed by extent leaves
                 for _ in 0..<header.entries {
+                    // Bug #33 (MEDIUM): Inline extent data was loaded with $0.load(as:) (native
+                    // endian) while block extent data used loadLittleEndian. On big-endian platforms
+                    // all inline extent fields were byte-swapped. Fixed to loadLittleEndian throughout.
+                    // Same fix: sonnet, sonnet-1m, opus, opus-bulk, opus-1m, opus-1m-bulk, sonnet-fix.
+                    // sonnet-bulk, sonnet-1m-bulk, sonnet-fix-bulk use plain load — wrong on big-endian.
                     let leaf = inodeBlock.subdata(in: offset..<offset + extentLeafSize).withUnsafeBytes {
-                        $0.load(as: ExtentLeaf.self)
+                        $0.loadLittleEndian(as: ExtentLeaf.self)
                     }
                     extents.append((leaf.startLow, leaf.startLow + UInt32(leaf.length)))
                     offset += extentLeafSize
@@ -232,7 +237,7 @@ extension EXT4 {
                 // When depth is 1 the extent header is followed by extent indices which point to leaves
                 for _ in 0..<header.entries {
                     let indexNode = inodeBlock.subdata(in: offset..<offset + extentIndexSize).withUnsafeBytes {
-                        $0.load(as: ExtentIndex.self)
+                        $0.loadLittleEndian(as: ExtentIndex.self)
                     }
                     try self.seek(block: indexNode.leafLow)
                     guard let block = try self.handle.read(upToCount: Int(self.blockSize)) else {
