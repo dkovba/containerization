@@ -66,11 +66,9 @@ extension EXT4 {
                 var components: [String] = [self.name]
                 var current = self.parent
                 while let ptr = current {
-                    if let data = ptr.pointee.name.data(using: .utf8),
-                        let str = String(data: data, encoding: .utf8)
-                    {
-                        components.append(str)
-                    }
+                    // Bug #42 (LOW): Pointless String→Data→String round-trip via UTF-8 re-encoding.
+                    // Same fix: sonnet-1m.
+                    components.append(ptr.pointee.name)
                     current = ptr.pointee.parent
                 }
                 guard let rootName = components.last else {
