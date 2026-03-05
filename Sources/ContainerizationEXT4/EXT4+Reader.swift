@@ -284,5 +284,14 @@ extension EXT4 {
         func children(of number: EXT4.InodeNumber) throws -> [(String, InodeNumber)] {
             try getDirTree(number)
         }
+
+        // Bug #29 (MEDIUM, 2 parts): seek(block:) was defined inside #if os(macOS) in EXT4Reader+Export.swift
+        // but called from platform-independent code in EXT4+Reader.swift (getDirTree, getExtents).
+        // This caused a compile error on Linux. Fixed by moving the definition here, outside any
+        // platform guard. Same fix: sonnet-1m-bulk, opus-1m.
+        // All other branches still place seek(block:) in the macOS-only file — won't compile on Linux.
+        func seek(block: UInt32) throws {
+            try self.handle.seek(toOffset: UInt64(block) * blockSize)
+        }
     }
 }

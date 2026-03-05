@@ -211,10 +211,7 @@ extension EXT4.EXT4Reader {
 
         return try EXT4.FileXattrsState.read(buffer: [UInt8](buffer), start: 32, offset: 0)
     }
-
-    func seek(block: UInt32) throws {
-        try self.handle.seek(toOffset: UInt64(block) * blockSize)
-    }
+    // Bug #29: seek(block:) removed from here; moved to EXT4+Reader.swift outside the macOS guard.
 }
 
 extension Date {
