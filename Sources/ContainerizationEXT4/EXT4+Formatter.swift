@@ -1372,8 +1372,12 @@ extension Date {
             return 0x8000_0000
         }
 
-        if s > 0x3_7fff_ffff {
-            return 0x3_7fff_ffff
+        // Bug #23 (HIGH): Upper clamp used 0x3_7fff_ffff instead of the correct EXT4 34-bit
+        // seconds field maximum 0x3_ffff_ffff (2^34 − 1). Values between these two constants
+        // passed unchecked, writing bits above bit 33 and corrupting the nanosecond field.
+        // Same fix: sonnet-fix.
+        if s > 0x3_ffff_ffff {
+            return 0x3_ffff_ffff
         }
 
         // Bug #1 (CRITICAL): UInt64(s) traps with a Swift runtime precondition failure when s is
