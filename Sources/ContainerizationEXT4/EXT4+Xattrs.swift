@@ -273,7 +273,11 @@ extension EXT4 {
                     continue
                 }
                 let rawName = buffer[i..<endIndex]
-                let name = String(bytes: rawName, encoding: .ascii)!
+                // Bug #25 (MEDIUM): Was String(bytes: rawName, encoding: .ascii)! (force-unwrap);
+                // any attribute name containing non-ASCII bytes crashed. Fixed to ?? "".
+                // Same fix: sonnet, opus, opus-1m, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m, sonnet-1m-bulk, opus-bulk, opus-1m-bulk, sonnet-fix still crash.
+                let name = String(bytes: rawName, encoding: .ascii) ?? ""
                 let valueStart = Int(xattrEntry.valueOffset) + offset
                 let valueEnd = Int(xattrEntry.valueOffset) + Int(xattrEntry.valueSize) + offset
                 let value = [UInt8](buffer[valueStart..<valueEnd])
