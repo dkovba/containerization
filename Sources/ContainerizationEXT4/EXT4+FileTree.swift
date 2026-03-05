@@ -58,28 +58,33 @@ extension EXT4 {
                 self.link = nil
             }
 
+            // Bug #41 (LOW): Old path used pushing(FilePath(last)) where last was "/" (the root
+            // name), which pushed an absolute path and replaced the entire base; every node's path
+            // returned "/". Fixed by building a components array and joining with "/".
+            // Same fix: sonnet-1m. All other branches return "/" for every node's path.
             var path: FilePath? {
                 var components: [String] = [self.name]
-                var _ptr = self.parent
-                while let ptr = _ptr {
-                    components.append(ptr.pointee.name)
-                    _ptr = ptr.pointee.parent
+                var current = self.parent
+                while let ptr = current {
+                    if let data = ptr.pointee.name.data(using: .utf8),
+                        let str = String(data: data, encoding: .utf8)
+                    {
+                        components.append(str)
+                    }
+                    current = ptr.pointee.parent
                 }
-                guard let last = components.last else {
+                guard let rootName = components.last else {
                     return nil
                 }
-                guard components.count > 1 else {
-                    return FilePath(last)
+                let pathComponents = Array(components.dropLast().reversed())
+                if pathComponents.isEmpty {
+                    return FilePath(rootName)
                 }
-                components = components.dropLast()
-                let path = components.reversed().joined(separator: "/")
-                guard let data = path.data(using: .utf8) else {
-                    return nil
+                let joined = pathComponents.joined(separator: "/")
+                if rootName == "/" {
+                    return FilePath("/" + joined).lexicallyNormalized()
                 }
-                guard let dataPath = String(data: data, encoding: .utf8) else {
-                    return nil
-                }
-                return FilePath(dataPath).pushing(FilePath(last)).lexicallyNormalized()
+                return FilePath(joined).lexicallyNormalized()
             }
         }
 
