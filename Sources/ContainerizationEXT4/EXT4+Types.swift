@@ -22,7 +22,10 @@ extension EXT4 {
     public struct SuperBlock {
         public var inodesCount: UInt32 = 0
         public var blocksCountLow: UInt32 = 0
-        public var rootBlocksCountLow: UInt32 = 0
+        // Bug #46 (LOW): Field was named rootBlocksCountLow; the corresponding ext4 field is
+        // s_r_blocks_count_lo (reserved blocks count, not root). Renamed for correctness.
+        // Same fix: sonnet-1m. All other branches use the misleading name rootBlocksCountLow.
+        public var reservedBlocksCountLow: UInt32 = 0
         public var freeBlocksCountLow: UInt32 = 0
         public var freeInodesCount: UInt32 = 0
         public var firstDataBlock: UInt32 = 0
