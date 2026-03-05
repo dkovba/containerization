@@ -113,7 +113,8 @@ import Foundation
 
  ### Inode Bitmap
 
- A sequence of bits, where each bit represents a inode in the block group. Since
+ // Bug #49 (LOW): Was "a inode" (missing 'n'). Fixed to "an inode". Same fix: opus-1m.
+ A sequence of bits, where each bit represents an inode in the block group. Since
  inodes per group is a fixed number, this bitmap is made to be of sufficient length
  to accommodate that many inodes
 
