@@ -57,7 +57,11 @@ extension EXT4 {
         var hash: UInt32 {
             var hash: UInt32 = 0
             for char in name {
-                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue!)
+                // Bug #24 (MEDIUM): Was char.asciiValue! (force-unwrap); any xattr name containing
+                // a non-ASCII character crashed. Fixed to ?? 0 (non-ASCII chars contribute 0 to hash).
+                // Same fix: sonnet, sonnet-1m, opus-1m, sonnet-fix-bulk.
+                // sonnet-bulk, sonnet-1m-bulk, opus, opus-bulk, opus-1m-bulk, sonnet-fix still crash.
+                hash = (hash << 5) ^ (hash >> 27) ^ UInt32(char.asciiValue ?? 0)
             }
             var i = 0
             while i + 3 < value.count {
