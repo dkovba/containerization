@@ -772,6 +772,11 @@ extension EXT4 {
                     }
                 }
 
+                // Bug #22 (HIGH, 2 parts): The freeBlocks variable computed with careful edge-case logic below
+                // was never used; a simpler freeBlocksCount = blocksPerGroup - blocks ignored those
+                // edge cases (wrong for small or last-group filesystems) and was written to the
+                // group descriptor instead. Fixed by using freeBlocks in the group descriptor.
+                // Same fix: sonnet-1m-bulk, sonnet-fix-bulk. All other branches write wrong counts.
                 var freeBlocks: UInt32 = UInt32(self.blocksPerGroup)
                 if freeBlocks < blocks {
                     freeBlocks = 0
@@ -788,7 +793,6 @@ extension EXT4 {
                 let blockBitmap = UInt64(bitmapOffset + 2 * group)
                 let inodeBitmap = UInt64(bitmapOffset + 2 * group + 1)
                 let inodeTable = inodeTableOffset + UInt64(group * inodeTableSizePerGroup)
-                let freeBlocksCount = UInt32(self.blocksPerGroup - blocks)
                 let freeInodesCount = UInt32(blockGroupSize.inodesPerGroup - inodes)
                 groupDescriptors.append(
                     // low bits
@@ -796,7 +800,8 @@ extension EXT4 {
                         blockBitmapLow: blockBitmap.lo,  // address of block bitmap
                         inodeBitmapLow: inodeBitmap.lo,  // address of inode bitmap
                         inodeTableLow: inodeTable.lo,  // address of inode table for this group
-                        freeBlocksCountLow: freeBlocksCount.lo,
+                        // Bug #22
+                        freeBlocksCountLow: freeBlocks.lo,
                         freeInodesCountLow: freeInodesCount.lo,
                         usedDirsCountLow: dirs.lo,
                         flags: 0x0000,
