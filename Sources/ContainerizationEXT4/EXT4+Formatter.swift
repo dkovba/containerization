@@ -919,8 +919,14 @@ extension EXT4 {
             let freeInodesCount = computedInodes.lo - totalInodes
             superblock.freeInodesCount = freeInodesCount
             superblock.firstDataBlock = 0
-            superblock.logBlockSize = 2
-            superblock.logClusterSize = 2
+            // Bug #30 (MEDIUM): superblock.logBlockSize was hardcoded to 2, which is only correct
+            // for 4096-byte blocks. Computed dynamically as log2(blockSize) - 10 per ext4 spec.
+            // Same fix: sonnet-bulk and sonnet-1m (use trailingZeroBitCount variant, also correct).
+            // This branch uses floating-point log2; trailingZeroBitCount avoids FP and is cleaner.
+            // All other branches hardcode 2 — wrong for any block size other than 4096.
+            let logBlockSize = UInt32(log2(Double(self.blockSize))) - 10
+            superblock.logBlockSize = logBlockSize
+            superblock.logClusterSize = logBlockSize
             superblock.blocksPerGroup = self.blocksPerGroup
             superblock.clustersPerGroup = self.blocksPerGroup
             superblock.inodesPerGroup = blockGroupSize.inodesPerGroup
