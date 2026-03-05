@@ -86,7 +86,12 @@ extension EXT4.XAttrEntry {
         let rawSize = Array(bytes[8...11])
         valueSize = UInt32(littleEndian: rawSize.withUnsafeBytes { $0.load(as: UInt32.self) })
 
-        let rawHash = Array(bytes[12...])
+        let rawHash = Array(bytes[12...15])
+        // Bug #40 (LOW): Was bytes[12...] (unbounded range), including all bytes past index 12.
+        // Though guarded by the bytes.count == 16 check above, the pattern was fragile and
+        // would silently include extra bytes if the guard were removed. Fixed to explicit bounds.
+        // Same fix (variant): opus-bulk and opus-1m use 12..<16; this branch uses 12...15 —
+        // both are equivalent and safe.
         hash = UInt32(littleEndian: rawHash.withUnsafeBytes { $0.load(as: UInt32.self) })
     }
 }
