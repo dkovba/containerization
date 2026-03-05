@@ -653,8 +653,8 @@ extension EXT4 {
             var groupDescriptors: [GroupDescriptor] = []
 
             let minGroups = (((self.pos / UInt64(self.blockSize)) - 1) / UInt64(self.blocksPerGroup)) + 1
-            if self.size < minGroups * blocksPerGroup * blockSize {
-                self.size = UInt64(minGroups * blocksPerGroup * blockSize)
+            if self.size < minGroups * UInt64(blocksPerGroup) * UInt64(blockSize) {  // Bug #31
+                self.size = minGroups * UInt64(blocksPerGroup) * UInt64(blockSize)
                 let pos = self.pos
                 guard lseek(self.handle.fileDescriptor, off_t(self.size - 1), 0) == self.size - 1 else {
                     throw Error.cannotResizeFS(self.size)
@@ -899,16 +899,22 @@ extension EXT4 {
             try self.seek(block: 0)
             try self.handle.write(contentsOf: Array<UInt8>.init(repeating: 0, count: 1024))
 
-            let computedInodes = totalGroups * blockGroupSize.inodesPerGroup
-            var blocksCount = totalGroups * self.blocksPerGroup
-            while blocksCount < totalBlocks {
+            // Bug #31 (MEDIUM, 2 parts): Mixed UInt64/UInt32 arithmetic in close() previously relied on
+            // custom operators from Integer+Extensions.swift (e.g. UInt64 * UInt32 = UInt64,
+            // UInt64 / UInt32 = UInt32). Comparisons like blocksCount < totalBlocks had
+            // implicit type coercions that could silently truncate via .lo. Fixed by adding
+            // explicit UInt64(...) casts at each operation and comparison.
+            // Same fix: sonnet-bulk, sonnet-1m-bulk. All other branches use custom operators.
+            let computedInodes = totalGroups * UInt64(blockGroupSize.inodesPerGroup)
+            var blocksCount = totalGroups * UInt64(self.blocksPerGroup)
+            while blocksCount < UInt64(totalBlocks) {
                 blocksCount = UInt64(totalBlocks)
             }
             let totalFreeBlocks: UInt64
-            if totalBlocks > blocksCount {
+            if UInt64(totalBlocks) > blocksCount {
                 totalFreeBlocks = 0
             } else {
-                totalFreeBlocks = blocksCount - totalBlocks
+                totalFreeBlocks = blocksCount - UInt64(totalBlocks)
             }
             var superblock = SuperBlock()
             superblock.inodesCount = computedInodes.lo
