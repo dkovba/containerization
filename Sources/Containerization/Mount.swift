@@ -163,7 +163,15 @@ extension Mount {
 
 extension VZDiskImageStorageDeviceAttachment {
     static func mountToVZAttachment(mount: Mount, options: [String]) throws -> VZDiskImageStorageDeviceAttachment {
-        var cachingMode: VZDiskImageCachingMode = .automatic
+        // Bug #57 (HIGH): VZDiskImageCachingMode.automatic can bypass the macOS page cache for
+        // reads while writes go through it. On a sparse APFS file this causes a specific
+        // incoherence: Linux writes to a block, the write lands in the page cache, but a
+        // subsequent read bypasses the cache and hits APFS directly — which returns zeros from
+        // the sparse hole, because the APFS extent was never allocated on disk yet. Data just
+        // written becomes invisible immediately. Use .cached so reads always go through the
+        // macOS page cache and see the most recent writes.
+        // See: https://github.com/apple/container/pull/1041, https://github.com/utmapp/UTM/pull/5919
+        var cachingMode: VZDiskImageCachingMode = .cached
         var synchronizationMode: VZDiskImageSynchronizationMode = .fsync
 
         for option in options {
@@ -179,6 +187,7 @@ extension VZDiskImageStorageDeviceAttachment {
             case "vzDiskImageCachingMode":
                 switch value {
                 case "automatic":
+                    // Unsafe with sparse APFS files; bypasses page cache for reads.
                     cachingMode = .automatic
                 case "cached":
                     cachingMode = .cached

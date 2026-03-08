@@ -1074,16 +1074,32 @@ ext4-bugs X
 
 ---
 
+## 57. HIGH: `VZDiskImageCachingMode.automatic` causes read-after-write incoherence on sparse VirtIO block devices, corrupting ext4 directories
+
+**File:** `Sources/Containerization/Mount.swift:166`
+**Bug:** The default `VZDiskImageCachingMode` for VirtIO block device attachments was `.automatic`. With sparse backing files and the Apple Virtualization Framework VirtIO block backend, `.automatic` can internally bypass the macOS page cache for reads while still buffering writes in it, creating a read-after-write hazard: a guest read of a just-written sparse block may return the old zeros from APFS storage instead of the newly written data. This corrupts ext4 directory blocks whose content has been written by the guest but whose backing storage is still a sparse hole:
+```
+EXT4-fs error (device vdb): ext4_readdir:262: inode #33249: block 131675: comm dnf:
+path /usr/lib/python3.9/site-packages/dnf/module: bad entry in directory:
+rec_len is smaller than minimal - offset=0, inode=0, rec_len=0, size=4096 fake=0
+```
+Confirmed by `lseek(SEEK_DATA/SEEK_HOLE)` analysis: the directory data block at APFS offset 131675 is a sparse hole (never materialized to APFS storage) while Python reads via the page cache return valid data. The bug manifests under memory pressure after long-running builds when page cache dirty pages are selectively evicted to APFS. The issue is a known defect in the Apple Virtualization Framework VirtIO block backend, independently confirmed and fixed in UTM (utmapp/UTM#5919) and apple/container (#1041).
+**Fix:** Change the default to `.cached`, which ensures reads always go through the macOS page cache and see the most recently written data. Remove `.automatic` from the set of allowed override values to prevent callers from re-enabling the broken mode.
+
+ext4-bugs X
+
+---
+
 ## Summary
 
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 7 |
-| HIGH | 17 |
+| HIGH | 18 |
 | MEDIUM | 16 |
 | LOW | 12 |
 | FALSE POSITIVE | 4 |
-| **Total** | **56** |
+| **Total** | **57** |
 
 ### Merged (4 pairs → 4 entries)
 | Merged | Into | Reason |
