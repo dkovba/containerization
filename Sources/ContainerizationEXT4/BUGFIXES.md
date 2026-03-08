@@ -1060,16 +1060,30 @@ ext4-bugs X
 
 ---
 
+## 56. MEDIUM: `groupDescriptorBlocks` multiplied by 32, inflating GDT block count 32×
+
+**File:** `EXT4+Formatter.swift:52, 963`
+**Bug:** `groupDescriptorBlocks` is computed as `((groupCount - 1) / groupsPerDescriptorBlock + 1) * 32`. The trailing `* 32` confuses `groupDescriptorSize` (32 bytes per `GroupDescriptor` struct) with a block-count multiplier. The correct value is the ceiling-divided block count alone: `(groupCount - 1) / groupsPerDescriptorBlock + 1`. For a 512 GiB disk (4096 groups, 128 groups/block, blockSize = 4096): correct = 32, buggy = 1024. Three downstream effects:
+1. `init` seeks to block 1025 instead of block 33, so all initial content (`lost+found`, etc.) is placed 992 blocks later than necessary.
+2. The group 0 block bitmap loop (Bug #20 fix site) frees bits 33–1024 as "unused reserved-GDT expansion space", reporting 992 extra free blocks in group 0.
+3. Groups 0 and 1 end up with their inode tables, block bitmaps, and inode bitmaps placed 61639–62699 blocks into the image — physically inside group 1's block range rather than within their own. The Linux kernel's `ext4_check_descriptors()` normally rejects this as `EFSCORRUPTED` and aborts the mount. To mask this, `logGroupsPerFlex` was set to 31, widening the flex_bg range check to `[0, 2^46 − 1]` so any block position passes. With Bug #56 fixed, the metadata is at standard positions and `logGroupsPerFlex` must be changed from 31 to 0 (disabling flex_bg processing, since `groups_per_flex = 1 << 0 = 1 < 2`).
+All three effects leave the filesystem self-consistent (the 992 freed blocks are genuine sparse holes that the formatter never wrote to, so the kernel may freely allocate them), but the `init` seek is 992 blocks too far, group 0's first-data-block position is wrong, and the flex_bg workaround leaves all block groups in a single enormous flex group.
+**Fix:** Remove `* 32`: `(groupCount - 1) / groupsPerDescriptorBlock + 1`. Also change `superblock.logGroupsPerFlex = 31` to `superblock.logGroupsPerFlex = 0`.
+
+ext4-bugs X
+
+---
+
 ## Summary
 
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 7 |
 | HIGH | 17 |
-| MEDIUM | 15 |
+| MEDIUM | 16 |
 | LOW | 12 |
 | FALSE POSITIVE | 4 |
-| **Total** | **55** |
+| **Total** | **56** |
 
 ### Merged (4 pairs → 4 entries)
 | Merged | Into | Reason |

@@ -50,7 +50,7 @@ extension EXT4 {
         }
 
         private var groupDescriptorBlocks: UInt32 {
-            ((groupCount - 1) / groupsPerDescriptorBlock + 1) * 32
+            (groupCount - 1) / groupsPerDescriptorBlock + 1
         }
 
         /// Initializes an ext4 filesystem formatter.
@@ -875,7 +875,7 @@ extension EXT4 {
                 // errors. Fixed by seeking to the start of the inode table and writing explicit zeros to
                 // materialize the inode table region before writing the bitmaps.
                 try self.seek(block: UInt32(inodeTableStart))
-                try self.handle.write(contentsOf: Array<UInt8>(repeating: 0, count: Int(inodeTableSizePerGroup) * Int(self.blockSize)))
+                try self.handle.write(contentsOf: [UInt8](repeating: 0, count: Int(inodeTableSizePerGroup) * Int(self.blockSize)))
 
                 // Only write the partial-group bitmap when the last group is genuinely partial
                 // (blocksInGroup < self.blocksPerGroup). When it equals self.blocksPerGroup the
@@ -960,7 +960,16 @@ extension EXT4 {
                 RoCompatFeature.largeFile | RoCompatFeature.hugeFile | RoCompatFeature.extraIsize
             superblock.minExtraIsize = EXT4.ExtraIsize
             superblock.wantExtraIsize = EXT4.ExtraIsize
-            superblock.logGroupsPerFlex = 31
+            // Bug #57 (MEDIUM): logGroupsPerFlex was set to 31 as a workaround for Bug #56.
+            // Bug #56 placed groups 0 and 1 inode tables at the wrong block positions (outside
+            // their own block group range). The kernel's ext4_check_descriptors() normally
+            // rejects group descriptors whose metadata blocks fall outside [group_start,
+            // group_start+blocksPerGroup-1]; with logGroupsPerFlex=31, the flex_bg range check
+            // uses [0, 2^46-1], so any block position passes. With Bug #56 now fixed, groups
+            // 0 and 1 metadata is at standard positions and the workaround is no longer needed.
+            // Setting logGroupsPerFlex=0 gives groups_per_flex=1 < 2, causing the kernel to
+            // skip flex_bg setup and use standard per-group allocation instead.
+            superblock.logGroupsPerFlex = 0
             superblock.uuid = UUID().uuid
             try withUnsafeLittleEndianBytes(of: superblock) { bytes in
                 try self.handle.write(contentsOf: bytes)
