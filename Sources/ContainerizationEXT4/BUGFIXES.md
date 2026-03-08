@@ -1034,16 +1034,42 @@ sonnet-fix-bulk X
 
 ---
 
+## 55. CRITICAL: Unoccupied block group inode tables left as sparse holes, corrupting block allocator
+
+**File:** `EXT4+Formatter.swift:871`
+**Bug:** In the loop over unoccupied block groups (`blockGroupSize.blockGroups..<totalGroups.lo`), the code seeked directly to the bitmap position (`group * blocksPerGroup + inodeTableSizePerGroup`) without writing the preceding inode table blocks. Those blocks remained as sparse holes in the file and read back as zeros. The group descriptor correctly recorded `inodeTableLow = group * blocksPerGroup`, but the kernel read zeros from those hole-backed blocks and treated all blocks in the group as free. The block allocator then attempted to allocate blocks that overlap the inode table metadata, producing:
+```
+ext4_mb_mark_diskspace_used: Allocating blocks N–M which overlap fs metadata
+EXT4-fs: Delayed block allocation failed ... with error 117
+EXT4-fs: This should not happen!! Data will be lost
+```
+Every unoccupied block group (groups 8, 9, 10, … up to the last) was affected, as confirmed by 4090 evenly-spaced 4-block holes at `N * 32768` offsets in the sparse image.
+**Fix:** Seek to `group * blocksPerGroup` (start of the inode table) and explicitly write `inodeTableSizePerGroup` zero blocks before writing the bitmaps, materializing the inode table region as real data rather than sparse holes.
+
+sonnet
+sonnet-bulk
+sonnet-1m
+sonnet-1m-bulk
+opus
+opus-bulk
+opus-1m
+opus-1m-bulk
+sonnet-fix
+sonnet-fix-bulk
+ext4-bugs X
+
+---
+
 ## Summary
 
 | Severity | Count |
 |----------|-------|
-| CRITICAL | 6 |
+| CRITICAL | 7 |
 | HIGH | 17 |
 | MEDIUM | 15 |
 | LOW | 12 |
 | FALSE POSITIVE | 4 |
-| **Total** | **54** |
+| **Total** | **55** |
 
 ### Merged (4 pairs → 4 entries)
 | Merged | Into | Reason |

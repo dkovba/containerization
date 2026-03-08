@@ -846,9 +846,9 @@ extension EXT4 {
                         blocksInGroup = rem
                     }
                 }
+                let inodeTableStart = UInt64(self.blocksPerGroup) * group
                 let blockBitmapOffset = UInt64(group * self.blocksPerGroup + inodeTableSizePerGroup)
                 let inodeBitmapOffset = UInt64(group * self.blocksPerGroup + inodeTableSizePerGroup + 1)
-                let inodeTableOffset = UInt64(self.blocksPerGroup) * group
                 let freeBlocksCount = UInt32(blocksInGroup - inodeTableSizePerGroup - 2)
                 let freeInodesCount = UInt32(blockGroupSize.inodesPerGroup)
                 groupDescriptors.append(
@@ -856,7 +856,7 @@ extension EXT4 {
                     GroupDescriptor(
                         blockBitmapLow: blockBitmapOffset.lo,  // address of block bitmap
                         inodeBitmapLow: inodeBitmapOffset.lo,  // address of inode bitmap
-                        inodeTableLow: inodeTableOffset.lo,  // address of inode table for this group
+                        inodeTableLow: inodeTableStart.lo,  // address of inode table for this group
                         freeBlocksCountLow: freeBlocksCount.lo,
                         freeInodesCountLow: freeInodesCount.lo,
                         usedDirsCountLow: 0,
@@ -868,7 +868,14 @@ extension EXT4 {
                         checksum: 0x0000
                     ))
                 totalBlocks += (inodeTableSizePerGroup + 2)
-                try self.seek(block: group * self.blocksPerGroup + inodeTableSizePerGroup)
+                // Bug #55 (CRITICAL): The loop seeked to group * blocksPerGroup + inodeTableSizePerGroup,
+                // skipping past the inode table blocks and leaving them as sparse holes. Holes read back
+                // as zeros; the kernel treated all blocks in the group as free and attempted to allocate
+                // blocks overlapping the inode table, producing "overlap fs metadata" / "Data will be lost"
+                // errors. Fixed by seeking to the start of the inode table and writing explicit zeros to
+                // materialize the inode table region before writing the bitmaps.
+                try self.seek(block: UInt32(inodeTableStart))
+                try self.handle.write(contentsOf: Array<UInt8>(repeating: 0, count: Int(inodeTableSizePerGroup) * Int(self.blockSize)))
 
                 // Only write the partial-group bitmap when the last group is genuinely partial
                 // (blocksInGroup < self.blocksPerGroup). When it equals self.blocksPerGroup the
