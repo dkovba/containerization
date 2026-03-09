@@ -1107,16 +1107,26 @@ ext4-bugs X
 
 ---
 
+## 59. HIGH: Default `VZDiskImageSynchronizationMode` was `.fsync` instead of `.full`, weakening guest fsync durability
+
+**File:** `Sources/Containerization/Mount.swift`
+**Bug:** The VirtIO block device attachment defaulted to `synchronizationMode: .fsync`. The `.fsync` mode only honours write barriers issued by the guest but ignores individual `fsync`/`fdatasync` system calls. This means a guest `fsync()` — which Linux ext4 issues to flush journal transactions and data blocks — was silently dropped, providing no durability guarantee for guest-initiated syncs. Under the journal-less formatter (Bug #58) this compounded corruption risk: even if `.fsync` passed barriers, individual file-level sync calls were not propagated to APFS.
+**Fix:** Change the default to `.full`, which propagates every guest `fsync`/`fdatasync` to the host filesystem, matching the vessel reference implementation. The mode remains user-overridable via the `sync-mode` mount option (`none`, `fsync`, `full`).
+
+ext4-bugs X
+
+---
+
 ## Summary
 
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 7 |
-| HIGH | 19 |
+| HIGH | 20 |
 | MEDIUM | 16 |
 | LOW | 12 |
 | FALSE POSITIVE | 4 |
-| **Total** | **58** |
+| **Total** | **59** |
 
 ### Merged (4 pairs → 4 entries)
 | Merged | Into | Reason |

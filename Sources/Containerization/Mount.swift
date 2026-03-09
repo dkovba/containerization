@@ -172,7 +172,10 @@ extension VZDiskImageStorageDeviceAttachment {
         // macOS page cache and see the most recent writes.
         // See: https://github.com/apple/container/pull/1041, https://github.com/utmapp/UTM/pull/5919
         var cachingMode: VZDiskImageCachingMode = .cached
-        var synchronizationMode: VZDiskImageSynchronizationMode = .fsync
+        // Bug #59 (HIGH): default was .fsync, which only honours write barriers but silently
+        // drops individual guest fsync()/fdatasync() calls. Use .full so every guest sync
+        // is propagated to the host filesystem, matching the vessel reference implementation.
+        var synchronizationMode: VZDiskImageSynchronizationMode = .full
 
         for option in options {
             let split = option.split(separator: "=")
