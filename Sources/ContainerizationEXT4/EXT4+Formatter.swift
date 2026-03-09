@@ -28,6 +28,7 @@ extension EXT4 {
         let blockSize: UInt32
         private var size: UInt64
         private let groupDescriptorSize: UInt32 = 32
+        private let journalEnabled: Bool
 
         private var blocksPerGroup: UInt32 {
             blockSize * 8
@@ -71,7 +72,7 @@ extension EXT4 {
         ///
         /// - Important: Ensure that the destination block device is accessible and has sufficient permissions
         ///              for formatting. The formatting process will erase all existing data on the device.
-        public init(_ devicePath: FilePath, blockSize: UInt32 = 4096, minDiskSize: UInt64 = 256.kib()) throws {
+        public init(_ devicePath: FilePath, blockSize: UInt32 = 4096, minDiskSize: UInt64 = 256.kib(), enableJournal: Bool = false) throws {
             /// The constructor performs the following steps:
             ///
             /// 1. Creates the first 10 inodes:
@@ -98,6 +99,7 @@ extension EXT4 {
             self.handle = fileHandle
             self.blockSize = blockSize
             self.size = minDiskSize
+            self.journalEnabled = enableJournal
             // make this a 0 byte file
             guard ftruncate(self.handle.fileDescriptor, 0) == 0 else {
                 throw Error.cannotTruncateFile(devicePath)
@@ -126,6 +128,11 @@ extension EXT4 {
             self.tree = FileTree(EXT4.RootInode, "/")
             // skip past the superblock and block descriptor table
             try self.seek(block: self.groupDescriptorBlocks + 1)
+            // Bug #58 (HIGH): write the JBD2 journal before any file data so the kernel
+            // mounts with data=ordered semantics.
+            if journalEnabled {
+                try self.writeJournal()
+            }
             // lost+found directory is required for e2fsck to pass
             try self.create(path: FilePath("/lost+found"), mode: Inode.Mode(.S_IFDIR, 0o700))
         }
@@ -954,6 +961,10 @@ extension EXT4 {
             superblock.lpfInode = EXT4.LostAndFoundInode
             superblock.inodeSize = UInt16(EXT4.InodeSize)
             superblock.featureCompat = CompatFeature.sparseSuper2 | CompatFeature.extAttr
+            if journalEnabled {
+                superblock.featureCompat = superblock.featureCompat | CompatFeature.hasJournal.rawValue
+                superblock.journalInum = UInt32(EXT4.JournalInode)
+            }
             superblock.featureIncompat =
                 IncompatFeature.filetype | IncompatFeature.extents | IncompatFeature.flexBg
             superblock.featureRoCompat =
@@ -1268,6 +1279,55 @@ extension EXT4 {
             inode.flags = InodeFlag.extents | inode.flags
             return inode
         }
+        // Bug #58 (HIGH): The formatter never created an ext4 journal, causing the Linux kernel
+        // to mount the filesystem without journal (data=writeback). Without a journal there are
+        // no write-ordering guarantees: a directory entry referencing a data block can become
+        // visible before the data block itself is written to APFS storage. Under memory pressure
+        // (long-running builds), dirty page eviction from the macOS page cache can expose APFS
+        // sparse holes as zero-filled blocks, corrupting directory entries:
+        //   ext4_readdir: inode #N: block B: rec_len=0 at offset=0
+        // Adding a JBD2 journal enables data=ordered mount mode, which forces data blocks to be
+        // written to storage before any journal transaction referencing them commits.
+        private func writeJournal() throws {
+            let journalBlocks: UInt32 = 1024
+            let journalStartBlock = self.currentBlock
+
+            // Write the JBD2 superblock at the first journal block.
+            // JBD2 on-disk format is big-endian.
+            var jb2sb = [UInt8](repeating: 0, count: Int(blockSize))
+            func putBE32(_ value: UInt32, at offset: Int) {
+                jb2sb[offset] = UInt8((value >> 24) & 0xFF)
+                jb2sb[offset + 1] = UInt8((value >> 16) & 0xFF)
+                jb2sb[offset + 2] = UInt8((value >> 8) & 0xFF)
+                jb2sb[offset + 3] = UInt8(value & 0xFF)
+            }
+            putBE32(0xC03B_3998, at: 0)  // h_magic (JBD2_MAGIC_NUMBER)
+            putBE32(4, at: 4)  // h_blocktype (JBD2_SUPERBLOCK_V2)
+            putBE32(0, at: 8)  // h_sequence
+            putBE32(blockSize, at: 12)  // s_blocksize
+            putBE32(journalBlocks, at: 16)  // s_maxlen
+            putBE32(1, at: 20)  // s_first (first log block after superblock)
+            putBE32(1, at: 24)  // s_sequence (initial)
+            // s_start = 0 at offset 28: clean journal, no transactions to replay
+            try self.handle.write(contentsOf: jb2sb)
+
+            // Seek past the remaining journal log blocks; they can remain sparse since the
+            // kernel initializes them as it records transactions.
+            try self.seek(block: journalStartBlock + journalBlocks)
+
+            // Set up the journal inode (inode #8 is the standard ext4 journal inode).
+            var journalInode = Inode()
+            journalInode.mode = Inode.Mode(.S_IFREG, 0o600)
+            journalInode.linksCount = 1
+            let journalSizeBytes = UInt64(journalBlocks) * UInt64(blockSize)
+            journalInode.sizeLow = journalSizeBytes.lo
+            journalInode.sizeHigh = journalSizeBytes.hi
+            journalInode.flags = InodeFlag.hugeFile.rawValue
+            journalInode.extraIsize = UInt16(EXT4.ExtraIsize)
+            journalInode = try self.writeExtents(journalInode, (journalStartBlock, journalStartBlock + journalBlocks))
+            self.inodes[Int(EXT4.JournalInode) - 1].initialize(to: journalInode)
+        }
+
         // writes a single directory entry
         private func writeDirEntry(name: String, inode: InodeNumber, left: inout Int, link: InodeNumber? = nil) throws {
             guard self.inodes[Int(inode) - 1].pointee.linksCount > 0 else {

@@ -149,17 +149,17 @@ struct Ext4FormatTests: ~Copyable {
     @Test func superblock() throws {
         let f = try EXT4.EXT4Reader(blockDevice: fsPath)
         #expect(f.superBlock.blocksCountLow == 32768)
-        #expect(f.superBlock.freeBlocksCountLow == 32246)  // total - 512 inode blocks
+        #expect(f.superBlock.freeBlocksCountLow == 31222)  // total - 512 inode blocks - 1024 journal blocks
     }
 
     /// This test checks that the group descriptor has been set correctly
     @Test func groupDescriptors() throws {
         let f = try EXT4.EXT4Reader(blockDevice: fsPath)
         let gd = try f.getGroupDescriptor(0)
-        #expect(gd.blockBitmapLow == 551)  // move over by 512 blocks (for inodes)
-        #expect(gd.inodeBitmapLow == 552)  // move over by 512 blocks (for inodes)
-        #expect(gd.inodeTableLow == 39)
-        #expect(gd.freeBlocksCountLow == 32246)  // 512 block used by larger inode table per block group
+        #expect(gd.blockBitmapLow == 1575)  // move over by 512 blocks (for inodes) + 1024 (for journal)
+        #expect(gd.inodeBitmapLow == 1576)  // move over by 512 blocks (for inodes) + 1024 (for journal)
+        #expect(gd.inodeTableLow == 1063)  // 39 + 1024 journal blocks
+        #expect(gd.freeBlocksCountLow == 31222)  // 512 blocks used by inode table + 1024 by journal
         #expect(gd.freeInodesCountLow == 8176)  // 512 times the inodes
         #expect(gd.usedDirsCountLow == 5)
     }

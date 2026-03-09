@@ -1090,16 +1090,33 @@ ext4-bugs X
 
 ---
 
+## 58. HIGH: Formatter never creates an ext4 journal, causing `data=writeback` mount with no write-ordering guarantees
+
+**File:** `EXT4+Formatter.swift:128`
+**Bug:** The formatter created ext4 filesystems without a JBD2 journal. Without a journal the Linux kernel mounts with `data=writeback` semantics: directory metadata (directory-entry blocks) can be written to the journal and flushed to storage before the data blocks they reference are written. Under memory pressure during long-running builds the macOS page cache may evict a dirty data block before it is flushed to APFS storage. Since APFS represents unwritten regions as sparse holes, a subsequent guest read returns all-zero bytes instead of the directory content:
+```
+EXT4-fs (vdb): mounted filesystem ... r/w without journal.
+EXT4-fs error (device vdb): ext4_readdir:262: inode #33249: block 131675: comm dnf:
+path /usr/lib/python3.9/site-packages/dnf/module: bad entry in directory:
+rec_len is smaller than minimal - offset=0, inode=0, rec_len=0, size=4096 fake=0
+```
+This is distinct from Bug #57 (`VZDiskImageCachingMode.automatic`): even with `.cached` VirtIO block mode, a dirty page that is evicted without being written to APFS can expose a sparse hole on re-read. The journal eliminates the hazard at the filesystem level: in `data=ordered` mode (the default when a journal is present) the kernel guarantees that all data blocks are written to storage before any journal transaction that references them is committed, so a directory entry never becomes visible before its data block is on disk.
+**Fix:** Write a 1024-block JBD2 journal immediately after the group-descriptor blocks. Set up inode #8 (the standard ext4 journal inode) with an extent tree covering the journal region. Set `s_feature_compat |= EXT4_FEATURE_COMPAT_HAS_JOURNAL` and `s_journal_inum = 8` in the superblock.
+
+ext4-bugs X
+
+---
+
 ## Summary
 
 | Severity | Count |
 |----------|-------|
 | CRITICAL | 7 |
-| HIGH | 18 |
+| HIGH | 19 |
 | MEDIUM | 16 |
 | LOW | 12 |
 | FALSE POSITIVE | 4 |
-| **Total** | **57** |
+| **Total** | **58** |
 
 ### Merged (4 pairs → 4 entries)
 | Merged | Into | Reason |

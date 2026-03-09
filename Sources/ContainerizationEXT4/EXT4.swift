@@ -281,6 +281,7 @@ public enum EXT4 {
 
     static let DefectiveBlockInode: InodeNumber = 1
     static let RootInode: InodeNumber = 2
+    static let JournalInode: InodeNumber = 8
     static let FirstInode: InodeNumber = 11
     static let LostAndFoundInode: InodeNumber = 11
 
