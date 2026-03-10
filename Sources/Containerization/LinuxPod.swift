@@ -60,6 +60,10 @@ public final class LinuxPod: Sendable {
         /// The default hosts file configuration for all containers in the pod.
         /// Individual containers can override this by setting their own `hosts` configuration.
         public var hosts: Hosts?
+        /// The system control options for the pod's VM sandbox.
+        /// Applied once when the pod is created, before any containers start.
+        /// Use this for pod-level sysctls (e.g. Kubernetes spec.securityContext.sysctls).
+        public var sysctl: [String: String] = [:]
 
         public init() {}
     }
@@ -229,7 +233,10 @@ public final class LinuxPod: Sendable {
         }
 
         // Linux toggles
-        spec.linux?.sysctl = config.sysctl
+        // Pod-level sysctls form the baseline; container-level values take precedence.
+        var sysctls = self.config.sysctl
+        sysctls.merge(config.sysctl) { _, containerValue in containerValue }
+        spec.linux?.sysctl = sysctls
 
         // If the rootfs was requested as read-only, set it in the OCI spec.
         // We let the OCI runtime remount as ro, instead of doing it originally.
@@ -354,6 +361,11 @@ extension LinuxPod {
 
                 try await vm.withAgent { agent in
                     try await agent.standardSetup()
+
+                    // Apply pod-level sysctls before any containers start.
+                    if !self.config.sysctl.isEmpty {
+                        try await agent.sysctl(settings: self.config.sysctl)
+                    }
 
                     // Create pause container if PID namespace sharing is enabled
                     if shareProcessNamespace {

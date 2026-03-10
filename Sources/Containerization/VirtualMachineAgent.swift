@@ -94,11 +94,18 @@ public protocol VirtualMachineAgent: Sendable {
     func configureDNS(config: DNS, location: String) async throws
     func configureHosts(config: Hosts, location: String) async throws
 
+    // Kernel parameters
+    func sysctl(settings: [String: String]) async throws
+
     // Container statistics
     func containerStatistics(containerIDs: [String], categories: StatCategory) async throws -> [ContainerStatistics]
 }
 
 extension VirtualMachineAgent {
+    public func sysctl(settings: [String: String]) async throws {
+        throw ContainerizationError(.unsupported, message: "sysctl")
+    }
+
     public func closeProcessStdin(id: String, containerID: String?) async throws {
         throw ContainerizationError(.unsupported, message: "closeProcessStdin")
     }
