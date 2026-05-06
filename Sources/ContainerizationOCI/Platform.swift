@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 4 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -103,6 +104,9 @@ public struct Platform: Sendable, Equatable {
     ///     - Throws:  `Error.invalidArch` if an unrecognized architecture is provided
     ///     - Throws:  `Error.invalidVariant` if a variant is provided, and it does not apply to the specified architecture
     public init(from platform: String) throws {
+        osVersion = nil
+        osFeatures = nil
+
         let items = platform.split(separator: "/", maxSplits: 1)
         guard let osValue = items.first else {
             throw ContainerizationError(.invalidArgument, message: "missing OS in \(platform)")
@@ -138,8 +142,10 @@ public struct Platform: Sendable, Equatable {
             _rawArch = "arm64"
         case "x86_64", "x86-64", "amd64":
             _rawArch = "amd64"
+            variant = nil
         default:
             _rawArch = archName.description
+            variant = nil
         }
 
         if archItems.count == 2 {
@@ -208,8 +214,10 @@ extension Platform: Hashable {
     ///  - Returns: `true | false`
     public static func ~= (lhs: Platform, rhs: Platform) -> Bool {
         if lhs.os == rhs.os {
-            if lhs._rawArch == rhs._rawArch {
-                switch rhs._rawArch {
+            // Flagged #2 (1 of 2): HIGH: `~=` uses `_rawArch` instead of normalized `architecture`, giving wrong results for non-normalized platform values
+            // The `~=` compatibility operator compares architectures using the raw backing field `_rawArch` in three places: the outer equality check (`lhs._rawArch == rhs._rawArch`), the inner `switch rhs._rawArch`, and the 386/amd64 special case (`lhs._rawArch == "386" && rhs._rawArch == "amd64"`). The `architecture` computed property normalizes raw strings via `normalizeArch` (e.g. `"aarch64"` → `"arm64"`, `"x86_64"` → `"amd64"`, `"armhf"` → `"arm"`), but `~=` bypasses this normalization entirely. By contrast, `==` already uses the normalized `architecture` property throughout.
+            if lhs.architecture == rhs.architecture {
+                switch rhs.architecture {
                 case "arm":
                     guard let lVariant = lhs.variant else {
                         return lhs == rhs
@@ -246,7 +254,8 @@ extension Platform: Hashable {
                     return lhs == rhs
                 }
             }
-            if lhs._rawArch == "386" && rhs._rawArch == "amd64" {
+            // Flagged #2 (2 of 2)
+            if lhs.architecture == "386" && rhs.architecture == "amd64" {
                 return true
             }
         }
@@ -260,11 +269,11 @@ extension Platform: Hashable {
         //  then, there is a possibility that for arm64 architecture, the variant may be set to nil
         //  In that case, the variant should be assumed to v8
         if lhs.architecture == "arm64" && rhs.architecture == "arm64" {
-            // The following checks effectively verify
-            // that one operand has nil value and other has "v8"
+            // Flagged #3: HIGH: `==` skips OS equality check in the `arm64` nil/v8 normalization path, treating platforms with different OSes as equal
+            // The `==` operator contains a special case to treat `arm64` platforms where one has `variant == nil` and the other has `variant == "v8"` as equal (since `nil` conventionally means v8 for arm64). However, the early `return true` in that branch never checks whether `lhs.os == rhs.os`. As a result, two arm64 platforms with different operating systems (e.g. `linux` vs `windows`) — one with `variant == nil` and one with `variant == "v8"` — are incorrectly considered equal. This also violates the `Hashable` contract: `hash(into:)` does combine `os`, so such platforms hash differently yet compare equal.
             if lhs.variant == nil || rhs.variant == nil {
                 if lhs.variant == "v8" || rhs.variant == "v8" {
-                    return true
+                    return lhs.os == rhs.os
                 }
             }
         }
@@ -276,17 +285,26 @@ extension Platform: Hashable {
         return osEqual && archEqual && variantEqual
     }
 
+    // Flagged #1: CRITICAL: `hash(into:)` is inconsistent with `==`, breaking `Hashable` contract for `arm64` platforms
+    // `==` treats an `arm64` platform with `variant == nil` as equal to one with `variant == "v8"`. However, `hash(into:)` called `hasher.combine(description)`, which produces `"linux/arm64"` for `nil` and `"linux/arm64/v8"` for `"v8"`. Swift's `Hashable` contract requires that equal values have the same hash, so these two equal platforms would hash differently, causing incorrect behavior in `Set` and `Dictionary`.
     public func hash(into hasher: inout Swift.Hasher) {
-        hasher.combine(description)
+        hasher.combine(os)
+        hasher.combine(architecture)
+        let normalizedVariant = (architecture == "arm64") ? (variant ?? "v8") : variant
+        hasher.combine(normalizedVariant)
     }
 }
 
 extension Platform: Codable {
 
+    // Flagged #4 (1 of 3): MEDIUM: `Codable` implementation silently drops `osVersion` and `osFeatures`
+    // The `CodingKeys` enum only declares cases for `os`, `architecture`, and `variant`. The `osVersion` and `osFeatures` stored properties (OCI field names `"os.version"` and `"os.features"`) have no corresponding `CodingKey` cases. As a result, `encode(to:)` never writes them and `init(from decoder:)` never reads them — it calls `self.init(arch:os:variant:)`, passing no values for `osVersion` or `osFeatures`, so both are always silently set to `nil` after a decode.
     enum CodingKeys: String, CodingKey {
         case os = "os"
         case architecture = "architecture"
         case variant = "variant"
+        case osVersion = "os.version"
+        case osFeatures = "os.features"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -294,6 +312,9 @@ extension Platform: Codable {
         try container.encode(os, forKey: .os)
         try container.encode(architecture, forKey: .architecture)
         try container.encodeIfPresent(variant, forKey: .variant)
+        // Flagged #4 (2 of 3)
+        try container.encodeIfPresent(osVersion, forKey: .osVersion)
+        try container.encodeIfPresent(osFeatures, forKey: .osFeatures)
     }
 
     public init(from decoder: Decoder) throws {
@@ -307,7 +328,10 @@ extension Platform: Codable {
             throw ContainerizationError(.invalidArgument, message: "missing OS")
         }
         let variant = try container.decodeIfPresent(String.self, forKey: .variant)
-        self.init(arch: architecture, os: os, variant: variant)
+        // Flagged #4 (3 of 3)
+        let osVersion = try container.decodeIfPresent(String.self, forKey: .osVersion)
+        let osFeatures = try container.decodeIfPresent([String].self, forKey: .osFeatures)
+        self.init(arch: architecture, os: os, osVersion: osVersion, osFeatures: osFeatures, variant: variant)
     }
 }
 

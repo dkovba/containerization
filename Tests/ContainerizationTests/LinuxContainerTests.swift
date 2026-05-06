@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 15:46 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -51,7 +52,9 @@ struct LinuxContainerTests {
         let process = LinuxProcessConfiguration(from: imageConfig)
 
         #expect(process.workingDirectory == "/")
-        #expect(process.environmentVariables == [])
+        // Flagged #1: HIGH: `processInitFromImageConfigWithNilValues` asserts wrong default `environmentVariables`
+        // The test asserted `process.environmentVariables == []` when `env` is `nil`, but `LinuxProcessConfiguration.init(from:)` sets `environmentVariables = config.env ?? ["PATH=\(Self.defaultPath)"]`.
+        #expect(process.environmentVariables == ["PATH=\(LinuxProcessConfiguration.defaultPath)"])
         #expect(process.arguments == [])
         #expect(process.user.username == "")  // Default User() has empty string username
     }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -111,7 +112,15 @@ extension ImageStore {
             var matchedManifests: [Descriptor] = []
             var skippedPlatforms = false
             for manifest in manifests {
+                // Flagged #1: MEDIUM: Platform-less manifest entries silently dropped during export
+                // The loop used `guard let p = manifest.platform else { continue }` without
+                //   appending the manifest first. Descriptors with no `platform` field — such as
+                //   OCI attestation manifests (`application/vnd.in-toto+json`), Cosign signatures,
+                //   or SBOM attachments — were unconditionally skipped and excluded from the index.
+                // Flagged #2: MEDIUM: ImageStore+Export silently drops platform-agnostic manifests during filtered export
+                // When filtering an image index by platform, manifests with no `platform` field were skipped with `continue` and never added to `matchedManifests`. Platform-agnostic manifests (e.g. attestation manifests or index-embedded blobs without a platform annotation) should always be included regardless of the platform filter.
                 guard let p = manifest.platform else {
+                    matchedManifests.append(manifest)
                     continue
                 }
                 if matching(p) {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:10 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -37,7 +38,9 @@ public actor AsyncMutex<T: Sendable> {
     /// withLock provides a scoped locking API to run a function while holding the lock.
     /// The protected value is passed to the closure for safe access.
     public func withLock<R: Sendable>(_ body: @Sendable @escaping (inout T) async throws -> R) async rethrows -> R {
-        while self.busy {
+        // Flagged #1 (1 of 2): CRITICAL: `withLock` allows new callers to steal the lock ahead of queued waiters, causing starvation
+        // In the `defer` block, `self.busy = false` was set unconditionally before resuming the next queued waiter via `next.resume(returning: ())`. Because the actor becomes free to process new tasks the moment the `defer` block completes, a new `withLock` caller could be scheduled before the just-resumed continuation runs. That new caller would see `busy == false`, acquire the lock, and push the previously-resumed waiter to the back of the queue. Under sustained contention this can repeat indefinitely, starving the earliest-queued waiter even though it was already dequeued and resumed.
+        if self.busy {
             await withCheckedContinuation { cc in
                 self.queue.append(cc)
             }
@@ -46,10 +49,11 @@ public actor AsyncMutex<T: Sendable> {
         self.busy = true
 
         defer {
-            self.busy = false
             if let next = self.queue.popFirst() {
                 next.resume(returning: ())
             } else {
+                // Flagged #1 (2 of 2)
+                self.busy = false
                 self.queue = []
             }
         }

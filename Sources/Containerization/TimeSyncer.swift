@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -34,6 +35,11 @@ actor TimeSyncer {
         }
 
         self.context = context
+        // Flagged #1 (1 of 2): HIGH: `TimeSyncer.close()` double-closes the context via actor re-entrancy and leaves stale references on throw
+        // Two related defects in `TimeSyncer.close()`: (1) `close()` did not clear `self.task` or `self.context` before the first suspension point (`await task.value`). While the first `close()` call was suspended there, a second concurrent caller could enter `close()`, pass the `guard let task else { return }` check (because `self.task` was still set), and proceed to call `try await self.context?.close()` concurrently with the first call. Both callers could then race to close the same underlying vminitd gRPC context while the other was still using it. (2) `self.task = nil` and `self.context = nil` were also placed after `try await context?.close()`; if `close()` threw, those assignments were never reached, leaving stale references that any subsequent call inspecting `self.context` would operate on.
+        // Flagged #2 (1 of 2): HIGH: `TimeSyncer` captures `self` inside an unstructured `Task`, causing an actor-isolation data race on `self.logger`
+        // `TimeSyncer.start()` created an unstructured `Task` whose closure referenced `self.logger`. `TimeSyncer` is an `actor`; unstructured tasks do not run on the actor's executor, so accessing `self.logger` inside the task is a cross-actor access without `await`. Under Swift 6 strict concurrency this is a compile-time error; under Swift 5 mode it is a silent data race.
+        let logger = self.logger
         self.task = Task {
             while true {
                 do {
@@ -56,8 +62,13 @@ actor TimeSyncer {
                         sec: Int64(timeval.tv_sec),
                         usec: Int32(timeval.tv_usec)
                     )
+                // Flagged #3: MEDIUM: TimeSyncer does not distinguish CancellationError from real sync failures — periodic loop and resume()
+                // The same defect appears in two methods. (1) The periodic sync loop had a single `catch` block that logged every error as a failed time-sync. When the actor's task was cancelled, `CancellationError` was caught here, logged as an error, and the loop continued — re-throwing cancellation on every subsequent `setTime` call until the task was eventually torn down. (2) `resume()` called `context.setTime(sec:usec:)` inside a `do/catch` whose only handler was a generic error logger. If the calling task was cancelled while awaiting `setTime`, the `CancellationError` was caught, logged as "failed to sync time with guest agent", and swallowed — neither re-thrown nor distinguished from a real RPC failure.
+                } catch is CancellationError {
+                    return
                 } catch {
-                    self.logger?.error("failed to sync time with guest agent: \(error)")
+                    // Flagged #2 (2 of 2)
+                    logger?.error("failed to sync time with guest agent: \(error)")
                 }
             }
         }
@@ -76,12 +87,13 @@ actor TimeSyncer {
             // Already closed, nop.
             return
         }
+        // Flagged #1 (2 of 2)
+        self.task = nil
+        let context = self.context
+        self.context = nil
 
         task.cancel()
         await task.value
-
-        try await self.context?.close()
-        self.task = nil
-        self.context = nil
+        try await context?.close()
     }
 }

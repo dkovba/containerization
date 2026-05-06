@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 18:54 — 0 critical, 3 high, 0 medium, 0 low (3 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -91,7 +92,9 @@ public actor LocalContentStore: ContentStore {
         let fileManager = FileManager.default
         let all = try fileManager.contentsOfDirectory(at: self._blobPath, includingPropertiesForKeys: nil)
         let allDigests = Set(all.map { $0.lastPathComponent })
-        let toDelete = allDigests.subtracting(keeping)
+        // Flagged #1: HIGH: `delete(keeping:)` deletes blobs that should be kept when digests are prefixed
+        // `allDigests` is populated from bare hex filenames on disk (last path components under `blobs/sha256/`), but the `keeping` parameter is not stripped of its `"sha256:"` prefix before the set subtraction. A digest like `"sha256:abc123..."` in `keeping` never matches the bare `"abc123..."` in `allDigests`, so the subtraction treats every blob as a deletion candidate and wipes content that should be retained.
+        let toDelete = allDigests.subtracting(keeping.map { $0.trimmingDigestPrefix })
         return try await self.delete(digests: Array(toDelete))
     }
 
@@ -107,7 +110,10 @@ public actor LocalContentStore: ContentStore {
             var deleted: [String] = []
             var deletedBytes: UInt64 = 0
             for toDelete in digests {
-                let p = self._blobPath.appendingPathComponent(toDelete)
+                // Flagged #2: HIGH: `delete(digests:)` silently fails to delete blobs when digests are prefixed
+                // `delete(digests:)` appends each element of `digests` directly to `_blobPath` without stripping the `"sha256:"` prefix. A digest like `"sha256:abc123..."` produces a path of `blobs/sha256/sha256:abc123...`, which does not exist on disk. The `try? LocalContent(path: p)` guard then fails and the loop silently continues, leaving the blob in place.
+                let d = toDelete.trimmingDigestPrefix
+                let p = self._blobPath.appendingPathComponent(d)
                 guard let content = try? LocalContent(path: p) else {
                     continue
                 }
@@ -130,7 +136,14 @@ public actor LocalContentStore: ContentStore {
     @discardableResult
     public func ingest(_ body: @Sendable @escaping (URL) async throws -> Void) async throws -> [String] {
         let (id, tempPath) = try await self.newIngestSession()
-        try await body(tempPath)
+        // Flagged #3: HIGH: `ingest(_:)` leaks the ingest session and temp directory when the body throws
+        // If the `body` closure throws, `ingest(_:)` propagates the error without calling `cancelIngestSession(id)`. The session ID remains permanently in `activeIngestSessions` and the temporary ingest directory is never removed from disk.
+        do {
+            try await body(tempPath)
+        } catch {
+            try await self.cancelIngestSession(id)
+            throw error
+        }
         return try await self.completeIngestSession(id)
     }
 

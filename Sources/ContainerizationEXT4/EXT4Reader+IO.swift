@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 01:18 — 2 critical, 0 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -225,10 +226,6 @@ extension EXT4.EXT4Reader {
 
             while remaining > 0 && bytesWritten < desiredBytes {
                 let chunk = min(desiredBytes - bytesWritten, Int(min(remaining, UInt64(1 << 20))))
-                let dest = UnsafeMutableRawBufferPointer(
-                    start: base.advanced(by: bytesWritten),
-                    count: chunk
-                )
 
                 do {
                     guard let data = try self.handle.read(upToCount: chunk) else {
@@ -240,6 +237,12 @@ extension EXT4.EXT4Reader {
                     }
 
                     // Copy the data to the destination buffer
+                    // Flagged #1: CRITICAL: `performRead()` buffer overread when `FileHandle.read` returns a short count
+                    // `dest` was constructed with `count: chunk` (the *requested* byte count) before `FileHandle.read(upToCount: chunk)` was called. The subsequent `dest.copyMemory(from: UnsafeRawBufferPointer(sourceBytes))` copies exactly `dest.count` bytes from `sourceBytes`. Swift's `copyMemory` carries a precondition that `source.count == self.count`; when a partial read returns `data.count < chunk` the counts diverge, firing a precondition failure (debug crash) or causing an out-of-bounds read into unrelated memory (release UB).
+                    let dest = UnsafeMutableRawBufferPointer(
+                        start: base.advanced(by: bytesWritten),
+                        count: data.count
+                    )
                     data.withUnsafeBytes { sourceBytes in
                         dest.copyMemory(from: UnsafeRawBufferPointer(sourceBytes))
                     }
@@ -389,7 +392,9 @@ extension EXT4.EXT4Reader {
         if size == 0 { return Data() }
 
         // Handle fast symlinks (target stored directly in inode block field)
-        if ino.mode.isLink() && size < 60 {
+        // Flagged #2: CRITICAL: `readFileFromInode()` misreads 60-byte inline symlinks
+        // The fast-symlink inline path was guarded by `size < 60`. The EXT4 `i_block` field is exactly 60 bytes (`EXT4_N_BLOCKS * 4 = 15 * 4`), so a symlink whose target is precisely 60 bytes fits entirely inline and has no allocated data blocks. With `size < 60` that boundary case falls through to `readFileBytesFromExtents`, which finds no extents and returns empty `Data`, silently producing a broken symlink target.
+        if ino.mode.isLink() && size <= 60 {
             // Extract target from inode block field
             let blockData = withUnsafeBytes(of: ino.block) { Data($0) }
             return blockData.prefix(Int(size))

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:23 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -116,8 +117,13 @@ struct LogLevelOption: ParsableArguments {
     }
 }
 
+// Flagged #1 (1 of 2): CRITICAL: `makeLogger` crashes on second call due to repeated `LoggingSystem.bootstrap`
+// `LoggingSystem.bootstrap` called directly in `makeLogger` triggers a fatal precondition on any second call
+private let _loggingBootstrap: Void = LoggingSystem.bootstrap(StreamLogHandler.standardError)
+
 func makeLogger(label: String, level: Logger.Level) -> Logger {
-    LoggingSystem.bootstrap(StreamLogHandler.standardError)
+    // Flagged #1 (2 of 2)
+    _ = _loggingBootstrap
     var log = Logger(label: label)
     log.logLevel = level
     return log

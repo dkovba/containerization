@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:49 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -59,9 +60,11 @@ actor ManagedContainer {
             group: URL(filePath: cgroupsPath),
             logger: log
         )
-        try cgManager.create()
 
         do {
+            // Flagged #1: MEDIUM: `cgManager.create()` called outside `do/catch` block leaks bundle on failure
+            // `try cgManager.create()` was called before the `do` block, so if cgroup creation threw an error the already-created `bundle` directory had no cleanup path — the `catch` block was never reached and the bundle was left on disk.
+            try cgManager.create()
             try cgManager.toggleAllAvailableControllers(enable: true)
 
             let initProcess: any ContainerProcess
@@ -103,6 +106,9 @@ actor ManagedContainer {
             self.log = log
         } catch {
             try? cgManager.delete()
+            // Flagged #2: MEDIUM: `catch` block in `init()` does not delete bundle on failure
+            // The `catch` block called `try? cgManager.delete()` but never called `try? bundle.delete()`. Any error thrown inside the `do` block left the bundle directory on disk.
+            try? bundle.delete()
             throw error
         }
     }

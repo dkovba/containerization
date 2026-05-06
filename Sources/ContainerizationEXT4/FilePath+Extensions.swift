@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 01:24 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -24,8 +25,9 @@ extension FilePath {
         self.withCString { cstr in
             var ptr = cstr
             var rawBytes: [UInt8] = []
-            while UInt(bitPattern: ptr) != 0 {
-                if ptr.pointee == 0x00 { break }
+            // Flagged #1: HIGH: `bytes` property loops forever on null-pointer check instead of null-byte check
+            // The `while` loop condition `UInt(bitPattern: ptr) != 0` tests whether the pointer *address* is non-zero (a nil-pointer guard), not whether the byte *at* that address is the C-string null terminator. Because `withCString` always provides a non-nil pointer, this condition never terminates the loop; the loop exits only via the inner `if ptr.pointee == 0x00 { break }`, which is the correct check but is buried as a secondary guard. The intended loop invariant — "keep going while the current byte is not the null terminator" — is never expressed in the loop condition.
+            while ptr.pointee != 0 {
                 rawBytes.append(UInt8(bitPattern: ptr.pointee))
                 ptr = ptr.successor()
             }

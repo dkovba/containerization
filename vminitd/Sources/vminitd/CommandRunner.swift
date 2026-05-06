@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:27 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -63,7 +64,17 @@ final class ReaperCommandRunner: CommandRunner, Sendable {
             subscribers[id] = Subscriber(continuation: continuation, stream: stream)
         }
 
-        try cmd.start()
+        // Flagged #1: MEDIUM: `ReaperCommandRunner.start()` leaks subscriber when `cmd.start()` throws
+        // The subscriber was inserted before `cmd.start()`; on throw the orphaned entry was never removed or finished.
+        do {
+            try cmd.start()
+        } catch {
+            subscribers.withLock { subscribers in
+                subscribers[id]?.continuation.finish()
+                subscribers.removeValue(forKey: id)
+            }
+            throw error
+        }
 
         return ProcessSubscription(id: id)
     }

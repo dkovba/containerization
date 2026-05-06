@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -25,7 +26,13 @@ extension Pipe {
         } catch {
             err = error
         }
-        try self.fileHandleForWriting.close()
+        // Flagged #1: MEDIUM: `close()` silently discards the read-side error when the write-side close also fails
+        // `fileHandleForWriting.close()` was called with a bare `try` outside any `do`/`catch` block. If this call throws, the function exits immediately via the unhandled `try`, and the read-side error already stored in `err` is silently discarded. Neither error is reported to the caller in a predictable way — the read-side failure is lost entirely.
+        do {
+            try self.fileHandleForWriting.close()
+        } catch {
+            if err == nil { err = error }
+        }
         if let err {
             throw err
         }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 09:38 — 0 critical, 1 high, 1 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -388,6 +389,9 @@ extension ContainerizationArchive.WriteEntry {
         let entry = WriteEntry()
         entry.path = path
         entry.fileType = .symbolicLink
+        // Flagged #2: MEDIUM: `WriteEntry.link` helper silently drops `permissions` parameter
+        // The `link(path:permissions:target:)` factory method accepts a `permissions` parameter but never assigns it to the entry, unlike the `dir` and `file` helpers which both set `entry.permissions`. The symlink entry is created with whatever the class default is rather than the caller-specified mode.
+        entry.permissions = permissions
         entry.symlinkTarget = target
         return entry
     }
@@ -399,9 +403,13 @@ extension EXT4.EXT4Reader {
         let buffer: [UInt8] = EXT4.tupleToArray(inode.inlineXattrs)
         try attributes.append(contentsOf: Self.readInlineExtendedAttributes(from: buffer))
         let block = inode.xattrBlockLow
-        try self.seek(block: block)
-        let buf = try self.handle.read(upToCount: Int(self.blockSize))!
-        try attributes.append(contentsOf: Self.readBlockExtendedAttributes(from: [UInt8](buf)))
+        // Flagged #1: HIGH: `getXattrsForInode` reads block 0 when inode has no external xattr block
+        // `inode.xattrBlockLow` is 0 when an inode stores all its extended attributes inline (no external xattr block). The original code calls `self.seek(block: block)` unconditionally, so when `block == 0` it seeks to the very start of the block device (the superblock) and passes the resulting bytes to `readBlockExtendedAttributes`. That function validates the xattr block magic number and will either throw on invalid data or return garbage attributes, breaking any test that calls `getXattrsForInode` on an inode whose xattrs fit entirely in inline storage.
+        if block != 0 {
+            try self.seek(block: block)
+            let buf = try self.handle.read(upToCount: Int(self.blockSize))!
+            try attributes.append(contentsOf: Self.readBlockExtendedAttributes(from: [UInt8](buf)))
+        }
         var xattrs: [String: Data] = [:]
         for attribute in attributes {
             guard attribute.fullName != "system.data" else {

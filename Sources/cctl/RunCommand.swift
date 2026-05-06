@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 7 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -66,7 +67,8 @@ extension Application {
         @Option(
             name: [.customLong("kernel"), .customShort("k")], help: "Kernel binary path", completion: .file(),
             transform: { str in
-                URL(fileURLWithPath: str, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)
+                // Flagged #4 (1 of 2): MEDIUM: `~` not expanded in path arguments
+                URL(fileURLWithPath: (str as NSString).expandingTildeInPath, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)
             })
         public var kernel: String
 
@@ -90,21 +92,30 @@ extension Application {
                 network = nil
             }
 
+            // Flagged #1: HIGH: `ContainerManager` initialized without `imageStore` parameter
+            // `ContainerManager(kernel:initfsReference:network:rosetta:)` is called without the `imageStore:` argument. The init that omits `imageStore` may use a default or nil store, preventing image lookup at container creation time.
             var manager = try await ContainerManager(
                 kernel: kernel,
                 initfsReference: "vminit:latest",
+                imageStore: Application.imageStore,
                 network: network,
                 rosetta: rosetta
             )
             let sigwinchStream = AsyncSignalHandler.create(notify: [SIGWINCH])
 
             let current = try Terminal.current
-            try current.setraw()
+            // Flagged #5: MEDIUM: `defer { current.tryReset() }` registered after `setraw()` — terminal left raw on partial failure
+            // `try current.setraw()` is called before `defer { current.tryReset() }` is registered. If `setraw()` succeeds but a subsequent early-exit path executes before the defer is registered (or if the Swift runtime reorders initialization), the terminal reset is not guaranteed to run.
             defer { current.tryReset() }
+            try current.setraw()
 
+            // Flagged #6: MEDIUM: `imageReference` not normalized before container creation in `run`
+            // `imageReference` is passed directly to `manager.create` without parsing and normalizing. Short-form references (e.g. `ubuntu`) may not match what is stored in the image store.
+            let imageRef = try Reference.parse(imageReference)
+            imageRef.normalize()
             let container = try await manager.create(
                 id,
-                reference: imageReference,
+                reference: imageRef.description,
                 rootfsSizeInBytes: fsSizeInMB.mib(),
                 readOnly: readOnly
             ) { config in
@@ -116,15 +127,17 @@ extension Application {
                 config.process.capabilities = .allCapabilities
 
                 for mount in self.mounts {
-                    let paths = mount.split(separator: ":")
-                    if paths.count != 2 {
+                    // Flagged #7: MEDIUM: Mount `host:guest` parsing splits on every `:` — host paths with colons are rejected
+                    // `mount.split(separator: ":")` splits on all colons and checks `paths.count != 2`, so a host path such as `/volume:name/data:/mnt/data` yields more than two parts and the mount is rejected.
+                    guard let colonIndex = mount.firstIndex(of: ":") else {
                         throw ContainerizationError(
                             .invalidArgument,
                             message: "incorrect mount format detected: \(mount)"
                         )
                     }
-                    let host = String(paths[0])
-                    let guest = String(paths[1])
+                    // Flagged #4 (2 of 2)
+                    let host = ((String(mount[mount.startIndex..<colonIndex])) as NSString).expandingTildeInPath
+                    let guest = String(mount[mount.index(after: colonIndex)...])
                     let czMount = Containerization.Mount.share(
                         source: host,
                         destination: guest
@@ -154,7 +167,10 @@ extension Application {
                 config.hosts = hosts
                 if let ociRuntimePath {
                     config.ociRuntimePath = ociRuntimePath
-                    config.mounts = LinuxContainer.defaultOCIMounts()
+                    // Flagged #2: HIGH: OCI runtime `--oci-runtime` replaces user-specified mounts instead of appending
+                    // `config.mounts = LinuxContainer.defaultOCIMounts()` overwrites `config.mounts`, discarding any mounts the user specified via `--mount` that were already placed in `config.mounts`.
+                    let userMounts = config.mounts
+                    config.mounts = LinuxContainer.defaultOCIMounts() + userMounts
                 }
 
                 config.useInit = self.`init`
@@ -177,20 +193,20 @@ extension Application {
                     }
                 }
 
-                try await container.wait()
+                // Flagged #3: HIGH: `container.wait()` exit code ignored; container always exits 0
+                // The return value of `container.wait()` is discarded, so the exit status of the containerized process is never propagated to the shell.
+                let exitStatus = try await container.wait()
                 group.cancelAll()
 
                 try await container.stop()
+                if exitStatus.exitCode != 0 {
+                    throw ExitCode(rawValue: exitStatus.exitCode)
+                }
             }
         }
 
-        private static let appRoot: URL = {
-            FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first!
-            .appendingPathComponent("com.apple.containerization")
-        }()
+        // Flagged #8: LOW: `appRoot` static property duplicated in `RunCommand.Run`
+        // `RunCommand.Run` defines its own private `appRoot` static property that duplicates the one on `Application`. The two implementations are identical but could diverge independently.
     }
 }
 #endif

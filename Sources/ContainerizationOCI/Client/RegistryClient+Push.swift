@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 17:14 — 0 critical, 0 high, 3 medium, 0 low (3 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -140,7 +141,13 @@ extension RegistryClient {
         // We have to pass a body closure rather than a body to reset the stream when retrying.
         let bodyClosure = {
             let stream = try streamGenerator()
-            let body = HTTPClientRequest.Body.stream(stream, length: .known(descriptor.size))
+            // Flagged #1: MEDIUM: `push()` accepts a `progress` handler but never invokes it, silently dropping all progress events
+            // `push(name:ref:descriptor:streamGenerator:progress:)` takes a `progress: ProgressHandler?` parameter, but the `bodyClosure` that feeds bytes to the PUT request passes `streamGenerator()` directly to `HTTPClientRequest.Body.stream(_:length:)` without ever calling `progress`. Every byte sent to the registry is invisible to the caller's progress handler.
+            let tracked = stream.map { (buffer: ByteBuffer) async -> ByteBuffer in
+                await progress?([.addSize(Int64(buffer.readableBytes))])
+                return buffer
+            }
+            let body = HTTPClientRequest.Body.stream(tracked, length: .known(descriptor.size))
             return body
         }
 
@@ -154,9 +161,12 @@ extension RegistryClient {
                 throw Error.invalidStatus(url: url, response.status, reason: reason)
             }
 
-            guard descriptor.digest == response.headers.first(name: "Docker-Content-Digest") else {
-                let required = response.headers.first(name: "Docker-Content-Digest") ?? ""
-                throw ContainerizationError(.internalError, message: "digest mismatch \(descriptor.digest) != \(required)")
+            // Flagged #2: MEDIUM: `push()` throws a false "digest mismatch" error when the registry omits `Docker-Content-Digest` from the PUT response
+            // After the PUT request succeeds, the code unconditionally evaluates `guard descriptor.digest == response.headers.first(name: "Docker-Content-Digest")`. The right-hand side returns `String?`; when the header is absent it is `nil`. In Swift, `String == nil` is always `false`, so the guard fails and throws `ContainerizationError(.internalError, message: "digest mismatch <digest> != ")` even though the upload completed successfully and no actual digest mismatch occurred.
+            if let responseDigest = response.headers.first(name: "Docker-Content-Digest") {
+                guard descriptor.digest == responseDigest else {
+                    throw ContainerizationError(.internalError, message: "digest mismatch \(descriptor.digest) != \(responseDigest)")
+                }
             }
         }
     }
@@ -168,7 +178,9 @@ extension RegistryClient {
             if String(tag[index...]) != digest {
                 object = ""
             } else {
-                object = String(tag[...i])
+                // Flagged #3: MEDIUM: `getManifestPath()` includes `@` in extracted tag, producing malformed manifest URLs
+                // `object = String(tag[...i])` uses an inclusive upper-bound subscript, where `i` is the index of the `@` separator in a `<tag>@<digest>` reference string. The `@` character at position `i` is included in `object`, so a tag like `"myapp@sha256:abc"` yields `"myapp@"` instead of `"myapp"`.
+                object = String(tag[..<i])
             }
         }
 

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 15:05 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -141,6 +142,9 @@ final class UsersTests {
                 #expect(throws: User.Error.self) {
                     try User.getExecUser(userString: testCase.userString, passwdPath: passwdPath, groupPath: groupPath)
                 }
+                // Flagged #1: HIGH: `testExecUserPasswdGroup` falls through to unconditional `getExecUser` call after expected-throw case
+                // Inside the `for testCase in testCases` loop in `testExecUserPasswdGroup`, the `if testCase.shouldThrow` branch calls `#expect(throws: User.Error.self)` but then falls through to the unconditional `let user = try User.getExecUser(...)` line. Any test case with `shouldThrow: true` would cause that line to throw an unhandled error, failing the test rather than passing it. The identical loop pattern in `testExecUserOnlyPasswd` correctly has a `continue` after the `#expect(throws:)` block.
+                continue
             }
             let user = try User.getExecUser(userString: testCase.userString, passwdPath: passwdPath, groupPath: groupPath)
             #expect(testCase.expect.uid == user.uid)

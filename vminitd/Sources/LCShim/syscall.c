@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:31 — 0 critical, 0 high, 0 medium, 2 low (2 total)
 /*
  * Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
  *
@@ -25,7 +26,9 @@ int CZ_pivot_root(const char *new_root, const char *put_old) {
   return syscall(SYS_pivot_root, new_root, put_old);
 }
 
-int CZ_set_sub_reaper() { return prctl(PR_SET_CHILD_SUBREAPER, 1); }
+// Flagged #1: `CZ_set_sub_reaper` defined with empty parameter list instead of `void`
+// The function was defined as `int CZ_set_sub_reaper()`. In C (unlike C++), an empty parameter list `()` is an old-style K&R declarator meaning the parameter types are *unspecified*, not that the function takes zero arguments. This does not form a proper prototype, so the compiler cannot reject call sites that pass spurious arguments, and the behaviour of such calls is undefined per C11 §6.5.2.2/6.
+int CZ_set_sub_reaper(void) { return prctl(PR_SET_CHILD_SUBREAPER, 1); }
 
 int CZ_pidfd_open(pid_t pid, unsigned int flags) {
   // Musl doesn't have pidfd_open.
@@ -37,7 +40,9 @@ int CZ_pidfd_getfd(int pidfd, int targetfd, unsigned int flags) {
   return syscall(SYS_pidfd_getfd, pidfd, targetfd, flags);
 }
 
-int CZ_prctl_set_no_new_privs() {
+// Flagged #2: `CZ_prctl_set_no_new_privs` defined with empty parameter list instead of `void`
+// The function was defined as `int CZ_prctl_set_no_new_privs()`. The same C-standard issue applies as for `CZ_set_sub_reaper`: `()` means unspecified parameters in C, not zero parameters, and therefore does not constitute a prototype.
+int CZ_prctl_set_no_new_privs(void) {
   return prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 }
 

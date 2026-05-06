@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -21,14 +22,15 @@ extension Vminitd: SocketRelayAgent {
             $0.id = configuration.id
             $0.vsockPort = port
 
-            if let perms = configuration.permissions {
-                $0.guestSocketPermissions = UInt32(perms.rawValue)
-            }
-
             switch configuration.direction {
             case .into:
                 $0.guestPath = configuration.destination.path
                 $0.action = .into
+                // Flagged #1: LOW: `Vminitd+SocketRelay` sets `guestSocketPermissions` on `.outOf` relays
+                // `guestSocketPermissions` was assigned before the `direction` switch, so it was included in the request for both `.into` and `.outOf` relays. For `.outOf` relays the host connects to an existing guest-side socket; setting permissions on it is meaningless and may confuse the guest agent.
+                if let perms = configuration.permissions {
+                    $0.guestSocketPermissions = UInt32(perms.rawValue)
+                }
             case .outOf:
                 $0.guestPath = configuration.source.path
                 $0.action = .outOf

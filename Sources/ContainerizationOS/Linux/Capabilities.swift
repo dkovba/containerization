@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 19:27 — 2 critical, 1 high, 0 medium, 0 low (3 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -429,9 +430,11 @@ public struct LinuxCapabilities: Sendable {
     /// Load current process capabilities from kernel
     public mutating func load() throws {
         let data = try getCurrentCapabilities()
-        self.effectiveSet = UInt64(data.effective1)
-        self.permittedSet = UInt64(data.permitted1)
-        self.inheritableSet = UInt64(data.inheritable1)
+        // Flagged #1: CRITICAL: `load()` discards capabilities 32–40 by ignoring upper 32-bit halves
+        // `load()` reconstructs each 64-bit capability set using only the lower 32-bit half returned by `capget(2)` (`effective1`, `permitted1`, `inheritable1`), ignoring the upper halves (`effective2`, `permitted2`, `inheritable2`). The kernel returns two `__user_cap_data_struct` entries; the second entry holds bits 32–63. By discarding it, capabilities 32–40 (`CAP_MAC_OVERRIDE`, `CAP_MAC_ADMIN`, `CAP_SYSLOG`, `CAP_WAKE_ALARM`, `CAP_BLOCK_SUSPEND`, `CAP_AUDIT_READ`, `CAP_PERFMON`, `CAP_BPF`, `CAP_CHECKPOINT_RESTORE`) are always reported as absent regardless of what the kernel returns.
+        self.effectiveSet = UInt64(data.effective1) | (UInt64(data.effective2) << 32)
+        self.permittedSet = UInt64(data.permitted1) | (UInt64(data.permitted2) << 32)
+        self.inheritableSet = UInt64(data.inheritable1) | (UInt64(data.inheritable2) << 32)
     }
 
     /// Check if capability is present in the given set
@@ -503,7 +506,9 @@ public struct LinuxCapabilities: Sendable {
         if kind.contains(.caps) {
             effectiveSet = 0xFFFF_FFFF_FFFF_FFFF
             permittedSet = 0xFFFF_FFFF_FFFF_FFFF
-            inheritableSet = 0
+            // Flagged #3: HIGH: `fill(.caps)` clears `inheritableSet` instead of filling it
+            // `fill(kind:)` is documented to "fill all bits of given capability types". The `.caps` flag is defined as covering effective, permitted, and inheritable. However, when `.caps` is requested the method sets `inheritableSet = 0` while setting `effectiveSet` and `permittedSet` to `0xFFFF_FFFF_FFFF_FFFF`. The inheritable set is therefore cleared rather than filled, directly contradicting the method's contract.
+            inheritableSet = 0xFFFF_FFFF_FFFF_FFFF
         }
         if kind.contains(.bounds) {
             boundingSet = 0xFFFF_FFFF_FFFF_FFFF
@@ -569,11 +574,16 @@ public struct LinuxCapabilities: Sendable {
         }
     }
 
+    // Flagged #2: CRITICAL: `applyMainCapabilities()` silently clears capabilities 32–40 on every apply
+    // `applyMainCapabilities()` constructs the `CapabilityData` passed to `capset(2)` with only `effective1`, `permitted1`, and `inheritable1` populated; `effective2`, `permitted2`, and `inheritable2` are left at their default value of `0`. Because `capset(2)` interprets both pairs of fields, this unconditionally zeros bits 32–63 of the effective, permitted, and inheritable sets in the kernel, regardless of what was stored in the in-memory `LinuxCapabilities` struct.
     private func applyMainCapabilities() throws {
         let data = CapabilityData(
             effective1: UInt32(effectiveSet & 0xFFFF_FFFF),
             permitted1: UInt32(permittedSet & 0xFFFF_FFFF),
-            inheritable1: UInt32(inheritableSet & 0xFFFF_FFFF)
+            inheritable1: UInt32(inheritableSet & 0xFFFF_FFFF),
+            effective2: UInt32(effectiveSet >> 32),
+            permitted2: UInt32(permittedSet >> 32),
+            inheritable2: UInt32(inheritableSet >> 32)
         )
 
         try setCapabilities(data: data)

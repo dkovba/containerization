@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 01:00 — 0 critical, 3 high, 0 medium, 0 low (3 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -39,7 +40,9 @@ extension EXT4.EXT4Reader {
             guard let path = item.path else {
                 continue
             }
-            if hardlinkedInodes.contains(item.inode) {
+            // Flagged #1: HIGH: `hardlinkTargets` overwritten with secondary hard-link path, corrupting tar entries
+            // `hardlinkTargets[item.inode] = path` was executed for every tree item whose inode appeared in `hardlinkedInodes`, including secondary hard-link paths (paths that are themselves entries in `self.hardlinks`). When the BFS traversal visits a secondary path after the primary, the dictionary entry is overwritten with the secondary path. The hardlink-writing loop then sets `entry.hardlink` to a path that is itself a hard-link entry, producing circular or invalid tar hard-link records.
+            if hardlinkedInodes.contains(item.inode) && self.hardlinks[path] == nil {
                 hardlinkTargets[item.inode] = path
             }
             guard self.hardlinks[path] == nil else {
@@ -127,7 +130,9 @@ extension EXT4.EXT4Reader {
                 try writer.writeEntry(entry: entry, data: data)
             } else if mode.isLink() {
                 entry.fileType = .symbolicLink
-                if size < 60 {
+                // Flagged #2: HIGH: Inline symlink with exactly 60-byte target exported with empty `symlinkTarget`
+                // The condition `if size < 60` incorrectly excluded the boundary case. EXT4 stores symlink targets up to and including 60 bytes inline in the 60-byte `i_block` array (`EXT4_N_BLOCKS * 4 = 15 * 4 = 60`). For a symlink with a 60-byte target, `item.blocks` is `nil` (no data blocks allocated); the `else` branch's `if let block = item.blocks` silently falls through, leaving `entry.symlinkTarget` as an empty string.
+                if size <= 60 {
                     let linkBytes = EXT4.tupleToArray(inode.block)
                     entry.symlinkTarget = String(bytes: linkBytes.prefix(Int(size)), encoding: .utf8) ?? ""
                 } else {
@@ -197,11 +202,8 @@ extension EXT4.EXT4Reader {
 
 extension Date {
     init(fsTimestamp: UInt64) {
-        if fsTimestamp == 0 {
-            self = Date.distantPast
-            return
-        }
-
+        // Flagged #3: HIGH: `Date(fsTimestamp: 0)` returns year 0001 instead of Unix epoch
+        // An early-return guard `if fsTimestamp == 0 { self = Date.distantPast; return }` mapped a zero EXT4 timestamp to `Date.distantPast` (approximately year 0001). A zero timestamp means `ctime = 0` and `ctimeExtra = 0`, which is the Unix epoch (1970-01-01 00:00:00 UTC). Zero timestamps are extremely common in reproducible container builds where tools zero all file modification times. The general computation path already produces the correct result: `Int64(base) = 0`, `epoch = 0`, `nanoseconds = 0.0`, yielding `Date(timeIntervalSince1970: 0.0)`.
         // 32 bits - base: seconds since January 1, 1970, signed (negative for pre-1970 dates)
         // 2 bits - epoch: overflow counter (0-3), how many times the 32-bit seconds field has wrapped
         // 30 bits - nanoseconds (0-999,999,999)

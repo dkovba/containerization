@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 14:12 — 1 critical, 5 high, 0 medium, 0 low (6 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -88,7 +89,9 @@ struct OCIClientTests: ~Copyable {
         let client = RegistryClient(host: "ghcr.io", authentication: authentication)
         let error = await #expect(throws: RegistryClient.Error.self) { try await client.ping() }
         guard case .invalidStatus(_, let status, let reason) = error else {
-            throw error!
+            // Flagged #1: CRITICAL: `pingWithInvalidCredentials` crashes when `#expect(throws:)` returns nil
+            // `#expect(throws: RegistryClient.Error.self)` returns `RegistryClient.Error?` — nil when the closure does not throw or throws a different error type. The subsequent `guard case .invalidStatus = error else { throw error! }` force-unwraps `error` in the else branch without checking for nil, causing a runtime crash instead of a test failure.
+            return
         }
         #expect(status == .unauthorized)
         #expect(reason == "access denied or wrong credentials")
@@ -151,7 +154,9 @@ struct OCIClientTests: ~Copyable {
         let manifest: Manifest = try await client.fetch(name: "apple/containerization/dockermanifestimage", descriptor: descriptor)
         var called = false
         var done = false
-        try await client.fetchBlob(name: "apple/containerization/dockermanifestimage", descriptor: manifest.layers.first!) { (expected, body) in
+        // Flagged #2: HIGH: `fetchBlob` crashes on nil first layer instead of failing the test gracefully
+        // `manifest.layers.first!` is passed directly as the `descriptor` argument to `client.fetchBlob`. `layers.first` returns an optional and the force-unwrap `!` causes a fatal error if the manifest has no layers, rather than a clean test failure. Every other optional unwrap in this file (`manifest.layers.first` in `pushIndex`, `OutputStream`, `manifestDescriptor`) uses `try #require()` for exactly this reason.
+        try await client.fetchBlob(name: "apple/containerization/dockermanifestimage", descriptor: try #require(manifest.layers.first)) { (expected, body) in
             called = true
             #expect(expected != 0)
             var received = 0
@@ -180,17 +185,19 @@ struct OCIClientTests: ~Copyable {
             break
         }
 
-        #expect(manifestDescriptor != nil)
-
-        let manifest: Manifest = try await client.fetch(name: "apple/containerization/emptyimage", descriptor: manifestDescriptor!)
+        // Flagged #3 (1 of 2): HIGH: `pushIndex` crashes on nil `manifestDescriptor` instead of failing the test gracefully
+        // After searching `index.manifests` for an amd64 platform entry, the code records `#expect(manifestDescriptor != nil)` — which does not throw — then immediately force-unwraps `manifestDescriptor!` on the very next statement and again later at `baseDescriptor: manifestDescriptor!`. Because `#expect` only records a failure without stopping execution, both force-unwraps are reached with a nil value when no matching platform manifest is found, causing a fatal nil dereference crash rather than a clean test failure.
+        let manifest: Manifest = try await client.fetch(name: "apple/containerization/emptyimage", descriptor: try #require(manifestDescriptor))
         let imgConfig: Image = try await client.fetch(name: "apple/containerization/emptyimage", descriptor: manifest.config)
 
         let layer = try #require(manifest.layers.first)
         let blobPath = contentPath.appendingPathComponent(layer.digest)
-        let outputStream = OutputStream(toFileAtPath: blobPath.path, append: false)
-        #expect(outputStream != nil)
+        // Flagged #4 (1 of 3): HIGH: `pushIndex` crashes on nil `OutputStream` instead of failing the test gracefully
+        // `OutputStream(toFileAtPath:append:)` returns an optional. The original code stores the result in `let outputStream: OutputStream?`, records a non-throwing `#expect(outputStream != nil)`, then immediately force-unwraps with `outputStream!` in two places — `outputStream!.withThrowingOpeningStream { ... }` and `outputStream!.write(...)` inside the closure. Because `#expect` does not throw, test execution continues past the failure record and hits the force-unwrap, causing a fatal nil dereference crash rather than a clean test failure.
+        let outputStream = try #require(OutputStream(toFileAtPath: blobPath.path, append: false))
 
-        try await outputStream!.withThrowingOpeningStream {
+        // Flagged #4 (2 of 3)
+        try await outputStream.withThrowingOpeningStream {
             try await client.fetchBlob(name: "apple/containerization/emptyimage", descriptor: layer) { (expected, body) in
                 var received: Int64 = 0
                 for try await buffer in body {
@@ -199,7 +206,8 @@ struct OCIClientTests: ~Copyable {
                     buffer.withUnsafeReadableBytes { pointer in
                         let unsafeBufferPointer = pointer.bindMemory(to: UInt8.self)
                         if let addr = unsafeBufferPointer.baseAddress {
-                            outputStream!.write(addr, maxLength: buffer.readableBytes)
+                            // Flagged #4 (3 of 3)
+                            outputStream.write(addr, maxLength: buffer.readableBytes)
                         }
                     }
                 }
@@ -237,16 +245,20 @@ struct OCIClientTests: ~Copyable {
                 baseDescriptor: manifest.config
             )
         } catch let err as ContainerizationError {
-            guard err.code != .exists else {
-                return
+            // Flagged #5: HIGH: `pushIndex` config-push catch block returns early on `.exists`, skipping manifest/index push and leaving `imgConfigDesc` nil
+            // The catch block for the config-push step uses `guard err.code != .exists else { return }; throw err`. When the config already exists (`.exists` error), the `else` branch executes `return`, exiting the entire test function before the manifest and index are pushed. Additionally, `imgConfigDesc` is never assigned in this path, so if control somehow continued past the guard it would force-unwrap nil at `config: imgConfigDesc!` on the next step.
+            guard err.code == .exists else {
+                throw err
             }
-            throw err
+            imgConfigDesc = manifest.config
         }
 
         // Push the image manifest.
+        // Flagged #6: HIGH: `pushIndex` crashes on nil `manifest.mediaType` instead of failing the test gracefully
+        // `manifest.mediaType` is `String?` (optional per the OCI spec). The code passes it directly as `mediaType: manifest.mediaType!` when constructing the new `Manifest` value. Because `#expect` is not used and there is no nil check, the force-unwrap causes a fatal nil dereference crash if the fetched manifest omits the `mediaType` field. The pattern is identical to the already-flagged `OutputStream`, `manifestDescriptor`, and `manifest.layers.first` crashes elsewhere in the same test.
         let newManifest = Manifest(
             schemaVersion: manifest.schemaVersion,
-            mediaType: manifest.mediaType!,
+            mediaType: try #require(manifest.mediaType),
             config: imgConfigDesc!,
             layers: manifest.layers,
             annotations: manifest.annotations
@@ -256,7 +268,8 @@ struct OCIClientTests: ~Copyable {
             name: name,
             ref: ref,
             content: newManifest,
-            baseDescriptor: manifestDescriptor!
+            // Flagged #3 (2 of 2)
+            baseDescriptor: try #require(manifestDescriptor)
         )
 
         // Push the index.

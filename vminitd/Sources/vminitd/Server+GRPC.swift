@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:57 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -177,6 +178,11 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
                 metadata: [
                     "error": "\(error)"
                 ])
+            // Flagged #3: MEDIUM: `sysctl()` double-wraps `GRPCStatus` errors thrown inside the `do` block
+            // `catch` unconditionally re-wraps every error including already-formatted `GRPCStatus` values thrown within the block
+            if error is GRPCStatus {
+                throw error
+            }
             throw GRPCStatus(
                 code: .internalError,
                 message: "sysctl: failed to set sysctl: \(error)"
@@ -321,8 +327,12 @@ extension Initd: Com_Apple_Containerization_Sandbox_V3_SandboxContextAsyncProvid
             if request.flags.createIfMissing {
                 flags |= O_CREAT
             }
+            // Flagged #2: HIGH: `writeFile()` leaves stale bytes when overwriting a longer existing file
+            // without `O_TRUNC`, non-append writes leave old bytes intact beyond the write position, corrupting the file tail
             if request.flags.append {
                 flags |= O_APPEND
+            } else {
+                flags |= O_TRUNC
             }
 
             let mode = request.mode > 0 ? mode_t(request.mode) : mode_t(0644)
@@ -1533,8 +1543,10 @@ extension Initd {
             )
         }
 
-        if ociSpec.linux!.cgroupsPath.isEmpty {
-            ociSpec.linux!.cgroupsPath = "/container/\(id)"
+        // Flagged #1: CRITICAL: `ociAlterations()` crashes when OCI spec has no `linux` field
+        // `ociSpec.linux!.cgroupsPath` force-unwraps the optional `linux` field without any prior nil check; crashes when `linux` is absent
+        if ociSpec.linux?.cgroupsPath.isEmpty == true {
+            ociSpec.linux?.cgroupsPath = "/container/\(id)"
         }
 
         if process.cwd.isEmpty {

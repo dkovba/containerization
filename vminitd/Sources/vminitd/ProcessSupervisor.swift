@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:31 — 1 critical, 1 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -52,8 +53,10 @@ final class ProcessSupervisor: Sendable {
                 guard let events = self.poller.wait() else {
                     return
                 }
+                // Flagged #1: HIGH: Epoll monitoring thread exits permanently on empty event set
+                // `if events.isEmpty { return }` exits the entire thread on a spurious wakeup or timeout
                 if events.isEmpty {
-                    return
+                    continue
                 }
                 for event in events {
                     let handler = self.handlers.withLock { $0[event.fd] }
@@ -84,8 +87,10 @@ final class ProcessSupervisor: Sendable {
 
     /// Remove a file descriptor from epoll monitoring and discard its handler.
     func unregisterFd(_ fd: Int32) throws {
-        self.handlers.withLock { _ = $0.removeValue(forKey: fd) }
+        // Flagged #2: MEDIUM: `unregisterFd` removes handler before deleting fd from epoll, leaving fd handler-less on error
+        // handler was removed first; if `poller.delete` throws, fd stays in epoll with no handler to receive events
         try self.poller.delete(fd)
+        self.handlers.withLock { _ = $0.removeValue(forKey: fd) }
     }
 
     func ready() {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -141,7 +142,10 @@ extension Mount {
             let attachment = VZVirtioBlockDeviceConfiguration(attachment: device)
             config.storageDevices.append(attachment)
         case .virtiofs(_):
-            guard FileManager.default.fileExists(atPath: self.source) else {
+            // Flagged #1: MEDIUM: `Mount.configure` accepts a regular file as a virtiofs source instead of requiring a directory
+            // The virtiofs path check called `FileManager.default.fileExists(atPath:)`, which returns `true` for any filesystem entry including regular files and symlinks. VirtioFS requires the source to be a directory; passing a non-directory would be accepted here but fail at VM start with a cryptic hypervisor error.
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: self.source, isDirectory: &isDir), isDir.boolValue else {
                 throw ContainerizationError(.notFound, message: "directory \(source) does not exist")
             }
 
@@ -168,7 +172,9 @@ extension VZDiskImageStorageDeviceAttachment {
         var cachingMode: VZDiskImageCachingMode = .cached
 
         for option in options {
-            let split = option.split(separator: "=")
+            // Flagged #2: MEDIUM: `Mount` option parser silently drops options whose value contains `=`
+            // `option.split(separator: "=")` splits on every occurrence of `=`, producing more than two parts for values like `key=a=b`. The `split.count != 2` guard then skips those options entirely.
+            let split = option.split(separator: "=", maxSplits: 1)
             if split.count != 2 {
                 continue
             }

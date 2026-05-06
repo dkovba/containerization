@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -249,17 +250,28 @@ extension ImageStore {
         let (id, tempDir) = try await self.contentStore.newIngestSession()
         let operation = ImportOperation(
             name: name, contentStore: self.contentStore, client: client, ingestDir: tempDir, progress: progress, maxConcurrentDownloads: maxConcurrentDownloads)
+        let index: Descriptor
+        // Flagged #1: MEDIUM: `pull` calls `cancelIngestSession` on an already-completed session
+        // The original code used a single `do/catch` block wrapping both
+        //   `operation.import(...)` and the `lock.withLock { completeIngestSession; _create }`
+        //   block. If `completeIngestSession` succeeded but `_create` subsequently threw, the
+        //   outer `catch` would fire and call `cancelIngestSession(id)` on a session that had
+        //   already been committed to the content store.
         do {
-            let index = try await operation.import(root: rootDescriptor, matcher: matcher)
-            return try await self.lock.withLock { lock in
-                try await self.contentStore.completeIngestSession(id)
-                let description = Image.Description(reference: reference, descriptor: index)
-                let image = try await self._create(description: description, lock: lock)
-                return image
-            }
+            index = try await operation.import(root: rootDescriptor, matcher: matcher)
         } catch {
             try? await self.contentStore.cancelIngestSession(id)
             throw error
+        }
+        return try await self.lock.withLock { lock in
+            do {
+                try await self.contentStore.completeIngestSession(id)
+            } catch {
+                try? await self.contentStore.cancelIngestSession(id)
+                throw error
+            }
+            let description = Image.Description(reference: reference, descriptor: index)
+            return try await self._create(description: description, lock: lock)
         }
     }
 
@@ -340,7 +352,11 @@ extension ImageStore {
         var failures: [(reference: String, message: String)] = []
 
         await withTaskGroup(of: (String, String?).self) { group in
-            for _ in 0..<maxConcurrentUploads {
+            // Flagged #2: MEDIUM: `ImageStore.pushAll` starts no workers when `maxConcurrentUploads` is 0
+            // The worker-seeding loop `for _ in 0..<maxConcurrentUploads` produces zero
+            //   iterations when `maxConcurrentUploads == 0`, so no tasks are ever added to the
+            //   group and no images are pushed.
+            for _ in 0..<max(1, maxConcurrentUploads) {
                 guard let reference = iterator.next() else { break }
                 group.addTask { await pushOne(reference) }
             }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 10:06 — 0 critical, 0 high, 0 medium, 1 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -61,6 +62,36 @@ struct TestCIDR {
         let input: String
         let expectedIP: String
         let expectedLength: UInt8
+    }
+
+    // Flagged #1: LOW: `ParsePreservation` struct defined but never used, leaving address-preservation behavior untested
+    // `ParsePreservation` had no corresponding `@Test(arguments:)` function, making it dead code and leaving address-preservation behavior completely untested.
+    @Test(arguments: [
+        ParsePreservation(
+            input: "192.168.1.100/24",
+            expectedIP: "192.168.1.100",
+            expectedLength: 24
+        ),
+        ParsePreservation(
+            input: "10.1.2.3/16",
+            expectedIP: "10.1.2.3",
+            expectedLength: 16
+        ),
+        ParsePreservation(
+            input: "2001:db8::1234/64",
+            expectedIP: "2001:db8::1234",
+            expectedLength: 64
+        ),
+        ParsePreservation(
+            input: "172.16.0.1/12",
+            expectedIP: "172.16.0.1",
+            expectedLength: 12
+        ),
+    ])
+    func testParsePreservation(testCase: ParsePreservation) throws {
+        let cidr = try CIDR(testCase.input)
+        #expect(cidr.address.description == testCase.expectedIP)
+        #expect(cidr.prefix.length == testCase.expectedLength)
     }
 
     // MARK: - Bounds Tests

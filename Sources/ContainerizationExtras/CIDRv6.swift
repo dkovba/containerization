@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:24 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -78,7 +79,9 @@ public struct CIDRv6: CustomStringConvertible, Equatable, Sendable, Hashable {
     /// The lowest address in this CIDR block
     @inlinable
     public var lower: IPv6Address {
-        IPv6Address(address.value & prefix.prefixMask128)
+        // Flagged #1: LOW: `lower` drops IPv6 zone identifier
+        // `IPv6Address(address.value & prefix.prefixMask128)` omits the `zone:` argument, so the zone identifier (e.g. `%eth0` on link-local addresses) is silently lost when computing the lower bound of the CIDR block. The sibling `upper` property correctly passes `zone: address.zone`.
+        IPv6Address(address.value & prefix.prefixMask128, zone: address.zone)
     }
 
     /// The highest address in this CIDR block (broadcast address).

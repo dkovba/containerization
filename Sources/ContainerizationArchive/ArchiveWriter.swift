@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -68,7 +69,10 @@ public final class ArchiveWriter {
     public func finishEncoding() throws {
         guard let u = underlying else { return }
         underlying = nil
-        let r = archive_free(u)
+        // Flagged #1: HIGH: `finishEncoding()` calls `archive_free()` without first calling `archive_write_close()`
+        // finishEncoding() calls archive_free(u) directly and checks its return value. archive_free() releases the archive object's memory but does not guarantee that write filters are flushed or that the end-of-archive record is written to the output. archive_write_close() is the libarchive API responsible for finalizing the stream (flushing buffered data, writing the two zero-filled 512-byte end-of-archive blocks for tar, etc.). Any errors during that finalization were also silently lost because archive_free() discards them.
+        let r = archive_write_close(u)
+        archive_free(u)
         guard r == ARCHIVE_OK else {
             throw ArchiveError.unableToCloseArchive(r)
         }
@@ -158,7 +162,9 @@ extension ArchiveWriter {
     fileprivate func finishEntry() throws {
         guard let underlying = self.underlying else { throw ArchiveError.noUnderlyingArchive }
 
-        archive_write_finish_entry(underlying)
+        // Flagged #3: MEDIUM: `finishEntry()` silently discards the return value of `archive_write_finish_entry()`
+        // archive_write_finish_entry() returns a CInt status code (ARCHIVE_OK, ARCHIVE_WARN, or ARCHIVE_FATAL) that indicates whether the entry was successfully finalized. The original code calls the function as a bare statement, discarding the return value entirely. Entry-finalization failures (e.g. a flush error to the underlying file descriptor) are therefore invisible to callers.
+        try wrap(archive_write_finish_entry(underlying), ArchiveError.unableToCloseArchive, underlying: underlying)
     }
 
     fileprivate func writeData(data: UnsafeRawBufferPointer) throws {
@@ -212,6 +218,9 @@ extension ArchiveWriter {
         rootEntry.modificationDate = Date(timeIntervalSince1970: Double(rootStat.st_mtim.tv_sec))
         #endif
         try self.writeHeader(entry: rootEntry)
+        // Flagged #2: HIGH: `archiveDirectory()` never calls `finishEntry()` for the root directory entry
+        // After writing the "./" root directory header with writeHeader(entry: rootEntry), finishEntry() is never called. Every other entry in the archive (both via the loop's writeEntry(entry:data:nil) path and the regular-file path) has a matching finishEntry(). The missing call leaves the root entry's stream position in an inconsistent state, which corrupts the archive layout for all subsequent entries.
+        try self.finishEntry()
 
         for case let relativePath as String in enumerator {
             let fullPath = dirPath.appending(relativePath)

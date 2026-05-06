@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -26,7 +27,9 @@ internal func createTemporaryDirectory(baseName: String) -> URL? {
         var mutablePath = Array(utf8Bytes) + [0]
         return mutablePath.withUnsafeMutableBufferPointer { buffer -> URL? in
             guard let baseAddress = buffer.baseAddress else { return nil }
-            mkdtemp(baseAddress)
+            // Flagged #1: HIGH: `createTemporaryDirectory()` returns a non-existent URL when `mkdtemp` fails
+            // The return value of `mkdtemp(baseAddress)` was discarded. When `mkdtemp` fails it returns `nil` and leaves the buffer unchanged (still containing the template suffix `XXXXXX`). The code then constructs and returns a `URL` from the unmodified buffer, pointing to a path that was never created on disk.
+            guard mkdtemp(baseAddress) != nil else { return nil }
             let resultPath = String(decoding: buffer[..<(buffer.count - 1)], as: UTF8.self)
             return URL(fileURLWithPath: resultPath, isDirectory: true)
         }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 00:17 — 2 critical, 0 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -541,9 +542,12 @@ extension EXT4 {
 
     struct DirectoryTreeRoot {
         let dot: DirectoryEntry
-        let dotName: [UInt8]
+        // Flagged #1 (1 of 2): CRITICAL: `DirectoryTreeRoot.dotName` and `dotDotName` declared as heap arrays, corrupting binary struct layout
+        // `dotName` and `dotDotName` are declared as `[UInt8]` (heap-allocated dynamic arrays) instead of fixed-size tuples. The ext4 HTree root structure defines these fields as `char dot_name[4]` and `char dotdot_name[4]` — 4 bytes each inline in the struct. Using `[UInt8]` inserts pointer-sized fat references into the struct, breaking `MemoryLayout<DirectoryTreeRoot>.size` and making any binary read/write of this struct produce corrupted data.
+        let dotName: (UInt8, UInt8, UInt8, UInt8)
         let dotDot: DirectoryEntry
-        let dotDotName: [UInt8]
+        // Flagged #1 (2 of 2)
+        let dotDotName: (UInt8, UInt8, UInt8, UInt8)
         let reservedZero: UInt32
         let hashVersion: UInt8
         let infoLength: UInt8
@@ -591,7 +595,9 @@ extension EXT4 {
         let blocks: UInt32
         let hash: UInt32
         let checksum: UInt32
-        let reserved: [UInt32]
+        // Flagged #2: CRITICAL: `XAttrHeader.reserved` declared as heap array, corrupting binary struct layout
+        // `reserved` is declared as `[UInt32]` (heap-allocated dynamic array) instead of a fixed-size tuple. The ext4 xattr block header defines this field as `__u32 h_reserved[3]` — three 32-bit words inline in the struct. Using `[UInt32]` inserts a pointer-sized fat reference, corrupting the struct's binary layout.
+        let reserved: (UInt32, UInt32, UInt32)
     }
 
 }
@@ -615,7 +621,9 @@ extension EXT4.Inode {
         inode.mtimeExtra = now_hi
         inode.crtime = now_lo
         inode.crtimeExtra = now_hi
-        inode.flags = EXT4.InodeFlag.hugeFile.rawValue
+        // Flagged #3: MEDIUM: `Inode.Root()` sets the `hugeFile` inode flag on a directory inode
+        // `Inode.Root()` initializes `inode.flags = EXT4.InodeFlag.hugeFile.rawValue` (0x40000). `EXT4_HUGE_FILE_FL` is only meaningful for large regular files where the `i_blocks` counter needs to be interpreted in filesystem-block units rather than 512-byte units. Setting it on a directory inode is incorrect and has no defined semantics. Additionally, the formatter's `writeExtents()` ORs in the `extents` flag, so the root inode ends up with both `hugeFile` and `extents` set simultaneously, which is inconsistent.
+        inode.flags = 0
         inode.extraIsize = UInt16(EXT4.ExtraIsize)
         return inode
     }

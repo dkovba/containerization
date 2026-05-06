@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:41 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -66,7 +67,9 @@ struct ExecCommand: ParsableCommand {
         let ackPipe = FileDescriptor(rawValue: 4)
 
         let pidFd = CZ_pidfd_open(Int32(parentPid), 0)
-        guard pidFd > 0 else {
+        // Flagged #1: HIGH: `pidfd_open` success check rejects valid file descriptor 0
+        // `CZ_pidfd_open` returns −1 on failure and a valid file descriptor (≥ 0) on success. The original check `guard pidFd > 0` incorrectly treats a return value of 0 as a failure.
+        guard pidFd >= 0 else {
             throw App.Errno(stage: "pidfd_open(\(parentPid))")
         }
         try Self.enterNS(

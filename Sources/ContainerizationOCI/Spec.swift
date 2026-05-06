@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -20,7 +21,12 @@
 
 public struct Spec: Codable, Sendable {
     public var version: String
-    public var hooks: Hook?
+    // Flagged #1 (1 of 3): HIGH: `Spec.hooks` typed as `Hook?` instead of `Hooks?`
+    // The `hooks` property on `Spec` was declared as `Hook?` — a single hook entry — instead of
+    // `Hooks?`, which is the container struct holding the named hook arrays (`prestart`, `createRuntime`,
+    // `createContainer`, `startContainer`, `poststart`, `poststop`). The `init(from:)` decoder likewise
+    // attempted to decode `Hook.self` for this key, compounding the error.
+    public var hooks: Hooks?
     public var process: Process?
     public var hostname, domainname: String
     public var mounts: [Mount]
@@ -30,7 +36,8 @@ public struct Spec: Codable, Sendable {
 
     public init(
         version: String = "",
-        hooks: Hook? = nil,
+        // Flagged #1 (2 of 3)
+        hooks: Hooks? = nil,
         process: Process? = nil,
         hostname: String = "",
         domainname: String = "",
@@ -67,7 +74,8 @@ public struct Spec: Codable, Sendable {
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.version = try container.decode(String.self, forKey: .version)
-        self.hooks = try container.decodeIfPresent(Hook.self, forKey: .hooks)
+        // Flagged #1 (3 of 3)
+        self.hooks = try container.decodeIfPresent(Hooks.self, forKey: .hooks)
         self.process = try container.decodeIfPresent(Process.self, forKey: .process)
         if let hostname = try container.decodeIfPresent(String.self, forKey: .hostname) {
             self.hostname = hostname
@@ -243,7 +251,11 @@ public struct LinuxCapabilities: Codable, Sendable {
 }
 
 public struct Box: Codable, Sendable {
-    var height, width: UInt
+    // Flagged #3: LOW: `Box.height` and `Box.width` are not `public`
+    // The two stored properties `height` and `width` of the `public struct Box` were declared with no
+    // access modifier, making them `internal`. The struct has a `public init`, so callers outside the module
+    // can construct a `Box` but cannot read back either dimension.
+    public var height, width: UInt
 
     public init(height: UInt, width: UInt) {
         self.height = height
@@ -754,7 +766,13 @@ public struct LinuxResources: Codable, Sendable {
         hugepageLimits: [LinuxHugepageLimit] = [],
         network: LinuxNetwork? = nil,
         rdma: [String: LinuxRdma]? = nil,
-        unified: [String: String] = [:]
+        // Flagged #2: MEDIUM: `LinuxResources.init` parameter `unified` cannot be `nil`
+        // The stored property `unified` is declared as `[String: String]?` (optional), but the `init`
+        // parameter had type `[String: String]` with a default of `[:]` (non-optional empty dictionary).
+        // The assignment `self.unified = unified` coerces the empty dict to a non-nil optional, so callers
+        // using the default argument always get `unified == [:]` rather than `nil`, with no way to express
+        // "this field is absent".
+        unified: [String: String]? = nil
     ) {
         self.devices = devices
         self.memory = memory

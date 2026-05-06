@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -29,14 +30,16 @@ public struct AttachedFilesystem: Sendable {
     public var options: [String]
 
     public init(mount: Mount, allocator: any AddressAllocator<Character>) throws {
-        switch mount.type {
-        case "virtiofs":
+        // Flagged #1: MEDIUM: `AttachedFilesystem` and `VZVirtualMachineInstance` kernel command-line builder dispatch on mount type string instead of typed `runtimeOptions`
+        // Two sites perform a `switch` on the raw mount type string literal (`"virtiofs"`, `"ext4"`) instead of the `runtimeOptions` enum. In `AttachedFilesystem`, a mismatch between the string and the actual runtime option silently falls through to the wrong case. In `VZVirtualMachineInstance`'s `Kernel.commandLine`, a mount whose `runtimeOptions` is `.virtioblk` but whose type string differs from `"ext4"` hits the `fatalError` default branch. Both sites contain the same class of error.
+        switch mount.runtimeOptions {
+        case .virtiofs:
             let name = try hashMountSource(source: mount.source)
             self.source = name
-        case "ext4":
+        case .virtioblk:
             let char = try allocator.allocate()
             self.source = "/dev/vd\(char)"
-        default:
+        case .any:
             self.source = mount.source
         }
         self.type = mount.type

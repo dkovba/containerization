@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -106,7 +107,12 @@ extension WriteEntry {
             guard let cstr = archive_entry_hardlink_utf8(underlying) else {
                 return nil
             }
-            return String(cString: cstr, encoding: .utf8)
+            // Flagged #1: HIGH: `hardlinkUtf8` getter silently returns `nil` for valid hardlink paths
+            // The getter called `String(cString: cstr, encoding: .utf8)`, which is a failable
+            // NSString-bridged initializer (`init?(cString:encoding:)`). It can return `nil` even when
+            // the C string is valid UTF-8, causing the getter to return `nil` for a hardlink that is
+            // actually set. Every other string getter in the file uses the non-failable `String(cString:)`.
+            return String(cString: cstr)
         }
         set {
             guard let newValue else {
@@ -175,17 +181,25 @@ extension WriteEntry {
     /// The date that the entry was created
     public var creationDate: Date? {
         get {
+            // Flagged #2 (1 of 2): MEDIUM: `creationDate` reads and writes the inode change time instead of the file birth time
+            // The `creationDate` property's getter and setter used the `archive_entry_ctime*`
+            // family of libarchive functions (`archive_entry_ctime_is_set`, `archive_entry_ctime`,
+            // `archive_entry_ctime_nsec`, `archive_entry_set_ctime`, `archive_entry_unset_ctime`).
+            // In POSIX semantics `ctime` is the *inode change time* (last metadata modification), not
+            // the file birth/creation time. libarchive provides a separate `birthtime` API
+            // (`archive_entry_birthtime*`) for the actual creation timestamp.
             Date(
                 underlying,
-                archive_entry_ctime_is_set,
-                archive_entry_ctime,
-                archive_entry_ctime_nsec)
+                archive_entry_birthtime_is_set,
+                archive_entry_birthtime,
+                archive_entry_birthtime_nsec)
         }
         set {
+            // Flagged #2 (2 of 2)
             setDate(
                 newValue,
-                underlying, archive_entry_set_ctime,
-                archive_entry_unset_ctime)
+                underlying, archive_entry_set_birthtime,
+                archive_entry_unset_birthtime)
         }
     }
 
@@ -298,7 +312,14 @@ extension WriteEntry {
         if let d = date {
             let ti = d.timeIntervalSince1970
             let seconds = floor(ti)
-            let nsec = max(0, min(1_000_000_000, ti - seconds * 1_000_000_000))
+            // Flagged #3: MEDIUM: `setDate` operator-precedence bug discards all sub-second timestamp precision
+            // The nanosecond calculation was written as `ti - seconds * 1_000_000_000`. Due to
+            // Swift's standard operator precedence, multiplication binds tighter than subtraction, so
+            // this evaluates as `ti - (seconds * 1_000_000_000)`. For any normal Unix timestamp
+            // (e.g. `ti ≈ 1_700_000_000.5`) this produces approximately −1.7 × 10¹⁸, which
+            // `max(0, …)` clamps to `0`. The intended formula was `(ti - seconds) * 1_000_000_000`,
+            // i.e. multiply the *fractional* part of the second by 10⁹.
+            let nsec = max(0, min(1_000_000_000, (ti - seconds) * 1_000_000_000))
             setter(underlying, time_t(seconds), CLong(nsec))
         } else {
             unset(underlying)

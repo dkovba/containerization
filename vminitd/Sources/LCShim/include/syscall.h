@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 /*
  * Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
  *
@@ -85,7 +86,9 @@ extern ssize_t splice(int fd_in, off_t *off_in, int fd_out, off_t *off_out,
 int CZ_setrlimit(int resource, unsigned long long soft, unsigned long long hard);
 
 int CZ_pivot_root(const char *new_root, const char *put_old);
-int CZ_set_sub_reaper();
+// Flagged #1: `CZ_set_sub_reaper` declared with empty parameter list instead of `void`
+// The function was declared as `int CZ_set_sub_reaper()`. In C (unlike C++), an empty parameter list `()` is an old-style declarator meaning the parameter types are *unspecified*, not that the function takes zero arguments. A caller supplying arguments would cause undefined behaviour per C11 §6.5.2.2/6.
+int CZ_set_sub_reaper(void);
 
 #ifndef SYS_pidfd_open
 #define SYS_pidfd_open 434
@@ -97,6 +100,8 @@ int CZ_pidfd_open(pid_t pid, unsigned int flags);
 #endif
 int CZ_pidfd_getfd(int pidfd, int targetfd, unsigned int flags);
 
-int CZ_prctl_set_no_new_privs();
+// Flagged #2: `CZ_prctl_set_no_new_privs` declared with empty parameter list instead of `void`
+// The function was declared as `int CZ_prctl_set_no_new_privs()`. The same C-standard issue applies as for `CZ_set_sub_reaper` above: `()` means unspecified parameters, not zero parameters.
+int CZ_prctl_set_no_new_privs(void);
 
 #endif

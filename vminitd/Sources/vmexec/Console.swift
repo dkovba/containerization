@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:35 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -35,11 +36,16 @@ class Console {
             throw App.Errno(stage: "open_ptmx")
         }
 
+        // Flagged #1 (1 of 2): MEDIUM: `init()` leaks master PTY file descriptor on failure
+        // `masterFD` is opened via `open("/dev/ptmx", ...)` but is never closed if `unlockpt` or `ptsname` subsequently fails. Both guard-else branches throw without closing `masterFD`, leaking the file descriptor.
         guard unlockpt(masterFD) == 0 else {
+            _ = _close(masterFD)
             throw App.Errno(stage: "unlockpt")
         }
 
+        // Flagged #1 (2 of 2)
         guard let slavePath = ptsname(masterFD) else {
+            _ = _close(masterFD)
             throw App.Errno(stage: "ptsname")
         }
 

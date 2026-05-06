@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 18:36 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -36,7 +37,9 @@ public final class LocalContent: Content {
         var hasher = SHA256()
 
         try self.file.seek(toOffset: 0)
-        while case let data = file.readData(ofLength: bufferSize), !data.isEmpty {
+        // Flagged #1: HIGH: `digest()` silently produces incorrect hash on I/O errors
+        // `file.readData(ofLength: bufferSize)` is the legacy non-throwing Foundation API. On an I/O error it raises an uncatchable NSException (crashing the process) or silently returns a short/empty `Data`, causing the SHA-256 hasher to finalize over incomplete data and return a wrong digest with no error signal to the caller. Every other read in this class uses the modern throwing variants (`read(upToCount:)`, `readToEnd()`), so errors there are correctly propagated as Swift errors.
+        while case let data = try file.read(upToCount: bufferSize), !data.isEmpty {
             hasher.update(data: data)
         }
 

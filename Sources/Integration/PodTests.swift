@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -335,15 +336,18 @@ extension IntegrationSuite {
         try await pod.startContainer("container1")
 
         let status = try await pod.waitContainer("container1")
-        guard status.exitCode == 0 else {
-            throw IntegrationError.assert(msg: "process status \(status) != 0")
-        }
 
         // Stop container twice - should not fail
         try await pod.stopContainer("container1")
         try await pod.stopContainer("container1")
 
         try await pod.stop()
+
+        // Flagged #2: MEDIUM: `testPodStopContainerIdempotency` skips pod cleanup when the exit-code assertion fires
+        // The `guard status.exitCode == 0` check was placed *before* the `pod.stopContainer()` calls and `pod.stop()`. If `container1` exits with a non-zero code the guard throws immediately, bypassing `pod.stopContainer("container1")` and `pod.stop()`, so the pod VM is never torn down.
+        guard status.exitCode == 0 else {
+            throw IntegrationError.assert(msg: "process status \(status) != 0")
+        }
     }
 
     func testPodListContainers() async throws {
@@ -704,6 +708,10 @@ extension IntegrationSuite {
                 throw IntegrationError.assert(msg: "sleep 9999 should NOT be visible in container2 (PID namespace isolation failed)")
             }
 
+            // Flagged #1: HIGH: `testPodContainerPIDNamespaceIsolation` calls `delete()` on a still-running exec process
+            // `sleepExec1` is started (`/bin/sleep 9999`) and is never killed or waited before `sleepExec1.delete()` is called. Every other long-running exec in the test suite is killed (via `pod.killContainer`) and waited before `delete()` is invoked. Deleting an exec whose underlying process is still running violates the expected lifecycle contract and can leave an orphaned process inside the container.
+            try await pod.killContainer("container1", signal: SIGKILL)
+            _ = try await pod.waitContainer("container1")
             try await sleepExec1.delete()
             try await pod.stop()
         } catch {

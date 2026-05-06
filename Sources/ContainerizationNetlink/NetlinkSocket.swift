@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -82,10 +83,15 @@ public class DefaultNetlinkSocket: NetlinkSocket {
         let addr = SockaddrNetlink(family: AddressFamily.AF_NETLINK, pid: pid)
         var buffer = [UInt8](repeating: 0, count: SockaddrNetlink.size)
         _ = try addr.appendBuffer(&buffer, offset: 0)
+        // Flagged #1 (1 of 2): MEDIUM: `DefaultNetlinkSocket.init()` leaks file descriptor when bind setup fails
+        // After `osSocket()` returns a valid file descriptor and assigns it to `sockfd`, three subsequent throw sites in `init()` exit without closing the descriptor: the `try addr.appendBuffer(...)` call, the `buffer.bind(as:)` nil guard, and the `osBind(...)` failure guard. Swift only calls `deinit` on fully-initialized instances, so none of these early exits trigger cleanup, and the OS file descriptor is permanently leaked for the lifetime of the process.
         guard let ptr = buffer.bind(as: sockaddr.self, size: buffer.count) else {
+            close(sockfd)
             throw NetlinkSocketError.bindFailure(rc: 0)
         }
+        // Flagged #1 (2 of 2)
         guard osBind(sockfd, ptr, UInt32(buffer.count)) >= 0 else {
+            close(sockfd)
             throw NetlinkSocketError.bindFailure(rc: errno)
         }
     }

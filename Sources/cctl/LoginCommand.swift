@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -53,7 +54,17 @@ extension Application {
                 guard let passwordData = try FileHandle.standardInput.readToEnd() else {
                     throw ContainerizationError(.invalidArgument, message: "failed to read password from stdin")
                 }
-                password = String(decoding: passwordData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                // Flagged #1: MEDIUM: `String(decoding:as:)` accepts invalid UTF-8 — silent data corruption in password reading
+                // `String(decoding: passwordData, as: UTF8.self)` never returns nil; it replaces invalid UTF-8 bytes with the replacement character (U+FFFD) rather than failing. A password containing invalid bytes is silently corrupted.
+                guard let decoded = String(bytes: passwordData, encoding: .utf8) else {
+                    throw ContainerizationError(.invalidArgument, message: "password contains invalid UTF-8")
+                }
+                password = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Flagged #2 (1 of 2): LOW: Empty password not validated — login succeeds with empty credentials
+                // When reading a password interactively or from stdin, an empty string passes through unchecked and is stored in the keychain as the user's password.
+                guard !password.isEmpty else {
+                    throw ContainerizationError(.invalidArgument, message: "password must not be empty")
+                }
             }
             let keychain = KeychainHelper(securityDomain: Application.keychainID)
             if username == "" {
@@ -62,9 +73,15 @@ extension Application {
             if password == "" {
                 password = try keychain.passwordPrompt()
                 print()
+                // Flagged #2 (2 of 2)
+                guard !password.isEmpty else {
+                    throw ContainerizationError(.invalidArgument, message: "password must not be empty")
+                }
             }
 
-            let server = Reference.resolveDomain(domain: self.server)
+            // Flagged #3: LOW: Server hostname not trimmed in login command
+            // `self.server` is passed to `Reference.resolveDomain` without trimming leading or trailing whitespace. A server name with a trailing newline or space (common when pasting) is stored in the keychain and used for registry connections as-is.
+            let server = Reference.resolveDomain(domain: self.server.trimmingCharacters(in: .whitespacesAndNewlines))
             let scheme = http ? "http" : "https"
             let client = RegistryClient(
                 host: server,

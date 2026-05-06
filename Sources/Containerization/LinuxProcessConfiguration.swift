@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -418,8 +419,11 @@ public struct LinuxProcessConfiguration: Sendable {
     }
 
     public init(from config: ImageConfig) {
-        self.workingDirectory = config.workingDir ?? "/"
-        self.environmentVariables = config.env ?? []
+        // Flagged #1: HIGH: `LinuxProcessConfiguration.init(from:)` incorrectly initialises `workingDirectory` and `environmentVariables` from OCI image config, dropping PATH and accepting empty paths
+        // Two defects in `init(from:)` at adjacent lines: (1) `self.workingDirectory = config.workingDir ?? "/"` guards against `nil` but not against an empty string. When an OCI image config contains `"workingDir": ""`, the fallback is not triggered and `self.workingDirectory` is set to `""`, causing the guest kernel to reject process execution. (2) `self.environmentVariables = config.env ?? []` uses an empty array as the fallback when the image config contains no environment. The default `environmentVariables` property initialises with `["PATH=\(Self.defaultPath)"]`, but this `init` bypassed that default, so a container started from an image with no env had no PATH at all.
+        let wd = config.workingDir ?? ""
+        self.workingDirectory = wd.isEmpty ? "/" : wd
+        self.environmentVariables = config.env ?? ["PATH=\(Self.defaultPath)"]
         self.arguments = (config.entrypoint ?? []) + (config.cmd ?? [])
         self.user = {
             if let rawString = config.user {
@@ -432,10 +436,16 @@ public struct LinuxProcessConfiguration: Sendable {
     /// Sets up IO to be handled by the passed in Terminal, and edits the
     /// process configuration to set the necessary state for using a pty.
     mutating public func setTerminalIO(terminal: Terminal) {
-        self.environmentVariables.append("TERM=xterm")
+        // Flagged #2 (1 of 2): MEDIUM: `LinuxProcessConfiguration` terminal setup omits `stderr` and unconditionally overwrites `TERM`
+        // Two defects in terminal mode configuration at the same site: (1) `configureTerminal(_:)` assigned the terminal `FileHandle` to `stdin` and `stdout` but omitted `stderr`, silently discarding all stderr output from terminal-mode processes. (2) `setTerminalIO(terminal:)` unconditionally appended `"TERM=xterm"` to `environmentVariables` without checking whether a `TERM` entry already existed; if the caller or image config had already set `TERM`, the array would contain two entries and the explicitly-set value would be silently ignored.
+        if !self.environmentVariables.contains(where: { $0.hasPrefix("TERM=") }) {
+            self.environmentVariables.append("TERM=xterm")
+        }
         self.terminal = true
         self.stdin = terminal
         self.stdout = terminal
+        // Flagged #2 (2 of 2)
+        self.stderr = terminal
     }
 
     func toOCI() -> ContainerizationOCI.Process {

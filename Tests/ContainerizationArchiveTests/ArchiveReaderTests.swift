@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 04:56 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -132,8 +133,10 @@ struct ArchiveReaderTests {
     // MARK: - Absolute Path Tests
 
     @Test func convertAbsolutePathToRelative() throws {
-        let filename1: String = "/tmp/\(UUID())"
-        let filename2: String = "//tmp//\(UUID())"
+        // Flagged #1 (1 of 2): MEDIUM: `convertAbsolutePathToRelative` tests wrong archive paths and meaningless security assertions
+        // `filename1` was declared as `"/tmp/\(UUID())"` and `filename2` as `"//tmp//\(UUID())"`. Because the `/tmp/` and `//tmp//` prefixes were embedded in the variables rather than only in the archive entry paths, the two archive entries became `/tmp//tmp/<uuid>` and `//tmp////tmp//<uuid>` — doubled paths — instead of the intended `/tmp/<uuid>` and `//tmp//<uuid>`. Additionally, the negative existence assertions `!fileExists(atPath: filename1)` and `!fileExists(atPath: filename2)` checked `/tmp/<uuid>` and `//tmp//<uuid>` respectively, but neither of those paths was ever present in the archive, so the security checks could never catch a failure. The test passed for coincidental reasons (the doubled path in the archive and the doubled path in the positive assertion cancelled out), but it was not testing the scenario described by its name.
+        let filename1: String = "\(UUID())"
+        let filename2: String = "\(UUID())"
         let archiveURL = try createTestArchive(
             name: "benign-absolute",
             entries: [
@@ -155,8 +158,9 @@ struct ArchiveReaderTests {
             "Expected absolute paths allowed, but got rejected paths \(rejectedPaths)")
 
         // Verify nothing was extracted to /tmp or /etc
-        #expect(!FileManager.default.fileExists(atPath: filename1))
-        #expect(!FileManager.default.fileExists(atPath: filename2))
+        // Flagged #1 (2 of 2)
+        #expect(!FileManager.default.fileExists(atPath: "/tmp/\(filename1)"))
+        #expect(!FileManager.default.fileExists(atPath: "/tmp/\(filename2)"))
         #expect(FileManager.default.fileExists(atPath: extractDir.appendingPathComponent("tmp/\(filename1)").path))
         #expect(FileManager.default.fileExists(atPath: extractDir.appendingPathComponent("tmp/\(filename2)").path))
     }

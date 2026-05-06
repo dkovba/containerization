@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -253,7 +254,9 @@ public struct NetlinkSession {
         }
 
         try sendRequest(buffer: &requestBuffer)
-        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWLINK) { AddressInfo() }
+        // Flagged #1: HIGH: `addressAdd` passes wrong `infoType` to `parseResponse`
+        // `parseResponse` is called with `infoType: NetlinkType.RTM_NEWLINK` after sending an `RTM_NEWADDR` request. If the kernel were to echo back an `RTM_NEWADDR` message (e.g. in a future kernel version or under unusual conditions), it would be silently skipped rather than parsed, and an unexpected non-zero `infos.count` check would never fire. Additionally, should the kernel return an unexpected `RTM_NEWLINK` message, it would be incorrectly treated as a matching response and parsed as `AddressInfo`, producing garbage results.
+        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWADDR) { AddressInfo() }
         guard infos.count == 0 else {
             throw Error.unexpectedResultSet(count: infos.count, expected: 0)
         }
@@ -339,7 +342,9 @@ public struct NetlinkSession {
         }
 
         try sendRequest(buffer: &requestBuffer)
-        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWLINK) { AddressInfo() }
+        // Flagged #2 (1 of 2): HIGH: `routeAdd` and `routeAddDefault` pass wrong `infoType` and wrong info type to `parseResponse`
+        // In both `routeAdd` and `routeAddDefault`, `parseResponse` is called with `infoType: NetlinkType.RTM_NEWLINK` and `AddressInfo()` after sending an `RTM_NEWROUTE` request. Any `RTM_NEWROUTE` response message would be skipped (type mismatch), and any unexpected `RTM_NEWLINK` message would be misidentified as a matching response and deserialized as `AddressInfo` (wrong struct layout), producing garbage results.
+        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWROUTE) { RouteInfo() }
         guard infos.count == 0 else {
             throw Error.unexpectedResultSet(count: infos.count, expected: 0)
         }
@@ -415,7 +420,8 @@ public struct NetlinkSession {
         }
 
         try sendRequest(buffer: &requestBuffer)
-        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWLINK) { AddressInfo() }
+        // Flagged #2 (2 of 2)
+        let (infos, _) = try parseResponse(infoType: NetlinkType.RTM_NEWROUTE) { RouteInfo() }
         guard infos.count == 0 else {
             throw Error.unexpectedResultSet(count: infos.count, expected: 0)
         }

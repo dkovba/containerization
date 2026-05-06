@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 05:59 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -166,11 +167,13 @@ struct Ext4FormatTests: ~Copyable {
 
     /// This test checks that the block bitmap has been set correctly
     @Test func blockBitmap() throws {
+        // Flagged #1 (1 of 2): CRITICAL: `blockBitmap` and `inodeBitmap` read group descriptor for non-existent group 1
+        // Both `blockBitmap()` and `inodeBitmap()` call `ext4.getGroupDescriptor(1)`, but the filesystem under test has exactly one block group (group 0): `blocksCountLow == blocksPerGroup == 32768`, meaning there is no group 1. The returned descriptor contains undefined data, so `blockBitmapOffset` and `inodeBitmapOffset` are garbage, and the subsequent `seek` and `read` calls in each test operate at arbitrary file positions rather than the actual bitmaps.
         let ext4 = try EXT4.EXT4Reader(blockDevice: fsPath)
-        let gd = try ext4.getGroupDescriptor(1)
+        let gd = try ext4.getGroupDescriptor(0)
         let blockBitmapOffset = gd.blockBitmapLow
-        let f = try #require(FileHandle(forReadingFrom: fsPath))
-        try f.seek(toOffset: ext4.blockSize * blockBitmapOffset)
+        let f = try FileHandle(forReadingFrom: fsPath.url)
+        try f.seek(toOffset: ext4.blockSize * UInt64(blockBitmapOffset))
         let bitmapSize = ext4.superBlock.blocksPerGroup / 8
         #expect(bitmapSize == 4096)
         let _ = try f.read(
@@ -179,11 +182,12 @@ struct Ext4FormatTests: ~Copyable {
 
     /// This test checks that the inode bitmap has been set correctly
     @Test func inodeBitmap() throws {
+        // Flagged #1 (2 of 2)
         let ext4 = try EXT4.EXT4Reader(blockDevice: fsPath)
-        let gd = try ext4.getGroupDescriptor(1)
+        let gd = try ext4.getGroupDescriptor(0)
         let inodeBitmapOffset = gd.inodeBitmapLow
-        let f = try #require(FileHandle(forReadingFrom: fsPath))
-        try f.seek(toOffset: ext4.blockSize * inodeBitmapOffset)
+        let f = try FileHandle(forReadingFrom: fsPath.url)
+        try f.seek(toOffset: ext4.blockSize * UInt64(inodeBitmapOffset))
         let bitmapSize = ext4.superBlock.inodesPerGroup / 8
         #expect(bitmapSize == 1024)
     }
@@ -193,8 +197,8 @@ struct Ext4FormatTests: ~Copyable {
         let ext4 = try EXT4.EXT4Reader(blockDevice: fsPath)
         let gd = try ext4.getGroupDescriptor(0)
         let inodeTableOffset = gd.inodeTableLow
-        let f = try #require(FileHandle(forReadingFrom: fsPath))
-        try f.seek(toOffset: ext4.blockSize * inodeTableOffset)
+        let f = try FileHandle(forReadingFrom: fsPath.url)
+        try f.seek(toOffset: ext4.blockSize * UInt64(inodeTableOffset))
         let inodeTableSize = ext4.superBlock.inodesPerGroup * UInt32(ext4.superBlock.inodeSize)
         #expect(inodeTableSize == 2_097_152)
         let inodeTableData = try #require(try f.read(upToCount: Int(inodeTableSize)))

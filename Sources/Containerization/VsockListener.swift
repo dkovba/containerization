@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -39,8 +40,10 @@ public final class VsockListener: NSObject, Sendable, AsyncSequence {
         self.stopListening = stopListen
     }
 
+    // Flagged #2: HIGH: `VsockListener.finish()` signals end-of-stream before stopping the listener, risking a yield-after-finish race
+    // `finish()` called `self.cont.finish()` first and then `self.stopListening(self.port)`. In the window between the two calls a new vsock connection could be accepted via the delegate callback, calling `cont.yield()` on an already-finished continuation.
     public func finish() throws {
-        self.cont.finish()
+        defer { self.cont.finish() }
         try self.stopListening(self.port)
     }
 
@@ -62,7 +65,9 @@ extension VsockListener: VZVirtioSocketListenerDelegate {
         }
         conn.close()
 
-        let fh = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        // Flagged #1: CRITICAL: VsockListener leaks every accepted file descriptor
+        // FileHandle(fileDescriptor: fd, closeOnDealloc: false) was used for the duplicated vsock connection fd. With closeOnDealloc: false, the FileHandle does not close the fd on deallocation; nothing else in the code closed it either.
+        let fh = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         let result = cont.yield(fh)
         if case .terminated = result {
             try? fh.close()

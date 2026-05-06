@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -31,7 +32,8 @@ public struct Reaper {
             }
             reaped[exit.pid] = exit.status
         }
-        return reaped
+        // Flagged #1: LOW: `reap()` contains unreachable `return` statement after infinite loop
+        // `reap()` contains a `while true` loop whose only exit path is `return reaped` inside the `guard else` branch. There is no `break` in the loop, so the `return reaped` statement placed after the closing brace of the loop is unreachable. Swift emits an "will never be executed" compiler warning for this dead code.
     }
 
     /// Returns the exit status of the last process that exited.

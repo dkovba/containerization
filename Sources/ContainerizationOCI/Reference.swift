@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -172,12 +173,12 @@ public class Reference: CustomStringConvertible {
         if name.count > nameTotalLengthMax {
             throw ContainerizationError(.invalidArgument, message: "name length \(name.count) greater than \(nameTotalLengthMax)")
         }
-        let fields = try name.matches(regex: Self.domainPattern)
-        // Extract domain and path
-        let domain = fields["domain"] ?? ""
-        let path = fields["path"] ?? ""
+        // Flagged #1 (1 of 2): CRITICAL: `withName(_:)` always throws — wrong regex used to extract domain and path
+        // `withName(_:)` calls `name.matches(regex: Self.domainPattern)` and then reads `fields["domain"]` and `fields["path"]`. However, `domainPattern` is constructed entirely from non-capturing groups and contains no named capture groups (`(?<domain>...)` or `(?<path>...)`). Both dictionary lookups always return `nil`, so `domain` and `path` both default to `""`. The subsequent guard `domain.isEmpty || path.isEmpty` is therefore always true and the method unconditionally throws "image reference domain or path is empty". `withName` is completely non-functional.
+        let (domain, path) = try Self.parseDomain(from: name)
 
-        if domain.isEmpty || path.isEmpty {
+        // Flagged #1 (2 of 2)
+        if (domain ?? "").isEmpty || path.isEmpty {
             throw ContainerizationError(.invalidArgument, message: "image reference domain or path is empty")
         }
 

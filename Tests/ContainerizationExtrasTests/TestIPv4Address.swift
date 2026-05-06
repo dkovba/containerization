@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 10:21 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -186,15 +187,17 @@ struct IPv4AddressTests {
             #expect(stringRepresentation == "127.0.0.1")
         }
 
+        // Flagged #1: HIGH: `testSendableConformance` silently drops its assertion
+        // `testSendableConformance()` is a synchronous `@Test` function that creates an unstructured `Task {}` but never awaits it. The test function returns immediately, and the `#expect(taskAddress.value == 0x7F00_0001)` inside the task body may execute after the test has already completed — or not at all if the process exits first. The test always passes vacuously regardless of whether the assertion holds.
         @Test("Sendable conformance")
-        func testSendableConformance() {
+        func testSendableConformance() async {
             // This test verifies that IPv4Address can be safely passed across concurrency boundaries
             let address = IPv4Address(0x7F00_0001)
 
-            Task {
+            await Task {
                 let taskAddress = address
                 #expect(taskAddress.value == 0x7F00_0001)
-            }
+            }.value
         }
 
         @Test(

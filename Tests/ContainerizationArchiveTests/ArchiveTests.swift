@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 05:09 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -93,6 +94,9 @@ struct ArchiveTests {
         #expect(throws: Never.self) {
             try archiver.writeEntry(entry: weirdPathEntry, data: data)
         }
+        // Flagged #1: HIGH: `tarUTF8` never finalises the archive writer
+        // `tarUTF8` never calls `finishEncoding()`; `deinit` only calls `archive_free()`, not `archive_write_close()`, leaving the gzip stream unflushed and the archive corrupt
+        try archiver.finishEncoding()
     }
 
     @Test func tarGzipWithOpenfile() throws {

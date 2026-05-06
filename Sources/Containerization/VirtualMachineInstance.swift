@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -18,9 +19,12 @@ import ContainerizationError
 import Foundation
 
 /// The runtime state of the virtual machine instance.
-public enum VirtualMachineInstanceState: Sendable {
+public enum VirtualMachineInstanceState: Sendable, Equatable {
     case starting
     case running
+    // Flagged #1: HIGH: Paused containers cannot be stopped — missing `.paused` state handling at every layer
+    // Paused-container stop is broken at two layers. (1) `LinuxContainer.stop()` attempts to extract a `startedState` and falls back to `createdState`; a paused container is in neither state, so `stop()` throws an `invalidState` error. (2) At the VM-instance layer, `VirtualMachineInstanceState` had no `.paused` case — the Virtualization framework's `.paused` state fell through to the `default` branch and was mapped to `.unknown` — and the guard in `VZVirtualMachineInstance.stop()` only allowed `.running`, so calling `stop()` on a paused VM also threw `.invalidState`. Both layers must be fixed together for a paused container to be stoppable.
+    case paused
     case stopped
     case stopping
     case unknown

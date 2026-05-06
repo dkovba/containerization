@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -54,6 +55,11 @@ extension UnixSocketRelayManager {
             try await relay.start()
         } catch {
             relays.removeValue(forKey: socket.id)
+            // Flagged #1 (1 of 2): HIGH: `UnixSocketRelayManager.stopAll()` abandons relays on first error and leaks state
+            // `stopAll()` iterates relays with `try relay.stop()`. If any relay throws, the loop exits immediately, leaving remaining relays running. The `relays` dictionary is never cleared, so subsequent calls see stale entries.
+            // Flagged #2: MEDIUM: `UnixSocketRelayManager.start()` does not stop a partially-started relay on failure
+            // When `relay.start()` threw, the `catch` block removed the relay from the `relays` dictionary but never called `relay.stop()`. If `start()` had created any resources before throwing (e.g. bound a Unix-domain socket for a `.outOf` relay), those resources were never cleaned up because `stop()` is the only code path that releases them.
+            try? relay.stop()
             throw error
         }
     }
@@ -70,7 +76,9 @@ extension UnixSocketRelayManager {
 
     func stopAll() async throws {
         for (_, relay) in relays {
-            try relay.stop()
+            // Flagged #1 (2 of 2)
+            try? relay.stop()
         }
+        relays.removeAll()
     }
 }

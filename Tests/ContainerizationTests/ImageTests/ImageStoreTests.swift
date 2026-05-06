@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 21:37 — 0 critical, 2 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -43,7 +44,9 @@ public class ImageStoreTests: ContainsAuth {
 
     @Test func testImageStoreOperation() async throws {
         let fileManager = FileManager.default
-        let tempDir = fileManager.uniqueTemporaryDirectory()
+        // Flagged #1 (1 of 2): HIGH: `uniqueTemporaryDirectory()` called without `create: true` — temp directory never created before use
+        // `fileManager.uniqueTemporaryDirectory()` returns a URL to a path that does not exist on disk; the next call to `ArchiveReader.extractContents(to: tempDir)` requires the directory to already exist and always fails without `create: true`
+        let tempDir = fileManager.uniqueTemporaryDirectory(create: true)
         defer {
             try? fileManager.removeItem(at: tempDir)
         }
@@ -82,7 +85,9 @@ public class ImageStoreTests: ContainsAuth {
         let imageReference = "ghcr.io/apple/containerization/dockermanifestimage:0.0.2"
 
         let remoteImageName = "ghcr.io/apple/test-images/image-push"
-        let epoch = Int(Date().timeIntervalSince1970.description)
+        // Flagged #2: HIGH: `testImageStorePush` tag generation is broken — wrong `Int` conversion and invalid nil-check
+        // `Int(Date().timeIntervalSince1970.description)` converts the `Double` to a `String` before parsing as `Int`; `Int(_:)` on a decimal string always returns `nil`, so `epoch` is always `nil` and tag always falls back to `"latest"`, causing collisions on every run
+        let epoch = Int(Date().timeIntervalSince1970)
         let tag = epoch != nil ? String(epoch!) : "latest"
         let upstreamTag = "\(remoteImageName):\(tag)"
         let _ = try await self.store.tag(existing: imageReference, new: upstreamTag)
@@ -107,7 +112,8 @@ public class ImageStoreTests: ContainsAuth {
 
     @Test func testLoadImageWithoutAnnotations() async throws {
         let fileManager = FileManager.default
-        let tempDir = fileManager.uniqueTemporaryDirectory()
+        // Flagged #1 (2 of 2)
+        let tempDir = fileManager.uniqueTemporaryDirectory(create: true)
         defer {
             try? fileManager.removeItem(at: tempDir)
         }

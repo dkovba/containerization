@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:05 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -110,7 +111,11 @@ package final class MemoryMonitor: Sendable {
                     let stats = try cgroupManager.stats()
                     let currentUsage = stats.memory?.usage ?? 0
 
-                    onThresholdExceeded(currentUsage, events.high)
+                    // Flagged #1: HIGH: `onThresholdExceeded` fires unconditionally, ignoring `threshold`
+                    // `onThresholdExceeded` was called on every high-watermark event without comparing `currentUsage` against `self.threshold`, making `threshold` dead code
+                    if currentUsage >= threshold {
+                        onThresholdExceeded(currentUsage, events.high)
+                    }
                 }
 
                 if events.oom > 0 || events.oomKill > 0 {

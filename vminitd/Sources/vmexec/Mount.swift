@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:45 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -42,7 +43,9 @@ struct ContainerMount {
 
     func configureConsole() throws {
         let ptmx = rootfs + "/dev/ptmx"
-        guard remove(ptmx) == 0 else {
+        // Flagged #1: MEDIUM: `configureConsole()` throws spuriously when `/dev/ptmx` does not exist
+        // `guard remove(ptmx) == 0` treats ENOENT as a fatal error. If the rootfs does not already contain a `/dev/ptmx` node, `remove()` returns -1 with `errno == ENOENT`, causing `configureConsole()` to throw before the symlink is ever created.
+        guard remove(ptmx) == 0 || errno == ENOENT else {
             throw App.Errno(stage: "remove(ptmx)")
         }
         guard symlink("pts/ptmx", ptmx) == 0 else {

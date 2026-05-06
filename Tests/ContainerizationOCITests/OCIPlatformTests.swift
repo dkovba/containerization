@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 12:53 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -53,6 +54,14 @@ struct OCIPlatformTests {
         let lhs = Platform(arch: "arm64", os: "linux", variant: nil)
         let rhs = Platform(arch: "arm64", os: "linux", variant: "v8")
         #expect(lhs == rhs, "One variant nil and other v8 => equal under special arm64 rule")
+    }
+
+    // Flagged #1: HIGH: `==` OS check skipped for `arm64` nil/v8 platforms goes untested
+    // The test suite contained no case exercising `Platform.==` when one `arm64` platform has `variant == nil`, the other has `variant == "v8"`, and the two platforms have **different** operating systems.
+    @Test func arm64_nilAndV8_differentOS() {
+        let lhs = Platform(arch: "arm64", os: "linux", variant: nil)
+        let rhs = Platform(arch: "arm64", os: "darwin", variant: "v8")
+        #expect(lhs != rhs, "arm64 nil/v8 with different OS must not be equal")
     }
 
     @Test func arm64_nilAndV7() {

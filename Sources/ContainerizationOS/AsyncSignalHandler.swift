@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -36,11 +37,16 @@ public final class AsyncSignalHandler: Sendable {
     /// DispatchSignalSource's for each registered signal.
     public func cancel() {
         self.state.withLock {
-            if $0.conts.isEmpty {
+            // Flagged #2: MEDIUM: Dispatch sources are never cancelled when no consumer has subscribed
+            // `cancel()` guards on `$0.conts.isEmpty` and returns early when the array is empty. If `cancel()` is called before any consumer has accessed the `signals` property, `conts` is empty but `sources` is not — the dispatch sources are silently skipped and never cancelled.
+            if $0.conts.isEmpty && $0.sources.isEmpty {
                 return
             }
 
             for cont in $0.conts {
+                // Flagged #1: CRITICAL: `cancel()` deadlocks when a consumer stream is cancelled
+                // `cont.finish()` was called while holding `Mutex<State>`. Swift's `AsyncStream` may invoke the `onTermination` closure synchronously from within `finish()`. The `onTermination` closure calls `self.cancel()`, which attempts to re-acquire the same non-reentrant `Mutex` — causing a deadlock.
+                cont.onTermination = nil
                 cont.finish()
             }
             for source in $0.sources {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 10:59 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -50,7 +51,9 @@ struct IPv6AddressParseTests {
             parsedValue == expectedValue,
             "For input '\(input)': expected \(expectedValue) but got \(parsedValue)"
         )
-        #expect(nextIndex == input.endIndex, "Parser should consume entire input")
+        // Flagged #1: MEDIUM: `parseHexadecimal` end-index compared against wrong view endpoint
+        // `nextIndex` is a `String.UTF8View.Index` but was compared against `input.endIndex` (character view) instead of `utf8.endIndex`
+        #expect(nextIndex == utf8.endIndex, "Parser should consume entire input")
     }
 
     @Test(

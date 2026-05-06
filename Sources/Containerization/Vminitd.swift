@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -150,7 +151,9 @@ extension Vminitd: VirtualMachineAgent {
                         high: protoStats.memoryEvents.high,
                         max: protoStats.memoryEvents.max,
                         oom: protoStats.memoryEvents.oom,
-                        oomKill: protoStats.memoryEvents.oomKill
+                        oomKill: protoStats.memoryEvents.oomKill,
+                        // Flagged #4: MEDIUM: `ContainerStatistics.MemoryEventStatistics` missing `oomGroupKill` field, silently dropping OOM group-kill data from the guest; field documentation must use correct semantics
+                        oomGroupKill: protoStats.memoryEvents.oomGroupKill
                     ) : nil
             )
         }
@@ -215,6 +218,11 @@ extension Vminitd: VirtualMachineAgent {
                 if let ociRuntimePath {
                     $0.ociRuntimePath = ociRuntimePath
                 }
+                // Flagged #2: HIGH: `Vminitd.startContainer` silently ignores the `options` parameter
+                // `startContainer(_:options:ociRuntimePath:)` accepted an `options` parameter but never assigned it to the outgoing RPC request. The guest agent therefore received an empty options field regardless of what the caller passed.
+                if let options {
+                    $0.options = options
+                }
                 $0.configuration = try enc.encode(configuration)
             })
     }
@@ -275,10 +283,12 @@ extension Vminitd: VirtualMachineAgent {
             let resp = try await client.waitProcess(request, callOptions: callOpts)
             return ExitStatus(exitCode: resp.exitCode, exitedAt: resp.exitedAt.date)
         } catch {
+            // Flagged #1: CRITICAL: `Vminitd.waitForProcess` crashes with a fatal error when `timeoutInSeconds` is `nil`
+            // The `RPCTimedOut` error handler constructed its message with `timeoutInSeconds!`, force-unwrapping an optional that is `nil` when no timeout was specified. A timeout error on an unlimited-wait call would therefore crash the process.
             if let err = error as? GRPCError.RPCTimedOut {
                 throw ContainerizationError(
                     .timeout,
-                    message: "failed to wait for process exit within timeout of \(timeoutInSeconds!) seconds",
+                    message: "failed to wait for process exit within timeout of \(timeoutInSeconds.map { "\($0)" } ?? "unknown") seconds",
                     cause: err
                 )
             }
@@ -482,12 +492,16 @@ extension Vminitd {
             switch response.status {
             case .metadata:
                 onMetadata(CopyMetadata(isArchive: response.isArchive, totalSize: response.totalSize))
+            // Flagged #3 (1 of 2): HIGH: `Vminitd.copy()` silently reports success when the guest agent stream ends without a `.complete` response
+            // The `copy()` helper iterated the gRPC response stream and returned early on `.complete`. If the stream ended (iterator exhausted) without ever sending a `.complete` response, execution fell off the end of the function and returned normally (`Void`). The caller received no error and concluded the copy had succeeded.
             case .complete:
-                break
+                return
             case .UNRECOGNIZED(let value):
                 throw ContainerizationError(.internalError, message: "copy: unrecognized response status \(value)")
             }
         }
+        // Flagged #3 (2 of 2)
+        throw ContainerizationError(.internalError, message: "copy: stream ended without a complete response")
     }
 }
 

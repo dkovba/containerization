@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 18:25 — 0 critical, 0 high, 2 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -47,7 +48,9 @@ public class ContentWriter {
     public func write(_ data: Data) throws -> (size: Int64, digest: SHA256.Digest) {
         let digest = SHA256.hash(data: data)
         let destination = base.appendingPathComponent(digest.encoded)
-        try data.write(to: destination)
+        // Flagged #1: MEDIUM: `write(_:)` uses non-atomic write, can corrupt existing content entries
+        // `data.write(to: destination)` is called without the `.atomic` option
+        try data.write(to: destination, options: .atomic)
         return (Int64(data.count), digest)
     }
 
@@ -116,6 +119,9 @@ public class ContentWriter {
             try FileManager.default.moveItem(at: tempURL, to: destination)
         } catch let error as NSError {
             guard error.code == NSFileWriteFileExistsError else {
+                // Flagged #2: MEDIUM: `create(from:)` leaks temp file on non-duplicate move failure
+                // `guard` exits via `throw error` without first removing the temporary file at `tempURL`
+                try? FileManager.default.removeItem(at: tempURL)
                 throw error
             }
             try? FileManager.default.removeItem(at: tempURL)

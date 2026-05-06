@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:07 — 0 critical, 0 high, 1 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -122,10 +123,10 @@ extension App {
     }
 
     static func setPermissions(user: ContainerizationOCI.User) throws {
-        if user.additionalGids.count > 0 {
-            guard setgroups(user.additionalGids.count, user.additionalGids) == 0 else {
-                throw App.Errno(stage: "setgroups()")
-            }
+        // Flagged #1: MEDIUM: `setPermissions()` skips `setgroups` when `additionalGids` is empty
+        // `setgroups` was guarded by `if user.additionalGids.count > 0`, so it was never called when the OCI process spec specified no additional groups. As a result the container process inherited the supplementary groups of the calling process (typically the VM init, running as root) instead of having them cleared to the empty set required by the spec.
+        guard setgroups(user.additionalGids.count, user.additionalGids) == 0 else {
+            throw App.Errno(stage: "setgroups()")
         }
         guard setgid(user.gid) == 0 else {
             throw App.Errno(stage: "setgid()")

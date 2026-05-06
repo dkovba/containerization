@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -74,7 +75,9 @@ extension DNS {
             text += nameservers.map { "nameserver \($0)" }.joined(separator: "\n") + "\n"
         }
 
-        if let domain {
+        // Flagged #1: LOW: `DNSConfiguration.render()` emits a malformed `domain` line when `domain` is an empty string
+        // The guard `if let domain` checked only for `nil`; an empty-string domain passed the check and caused `"domain \n"` to be appended to the rendered `resolv.conf` text.
+        if let domain, !domain.isEmpty {
             text += "domain \(domain)\n"
         }
 

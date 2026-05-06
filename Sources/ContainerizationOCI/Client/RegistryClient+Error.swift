@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 16:35 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -42,6 +43,15 @@ extension RegistryClient {
             let code: String
             let message: String
             let detail: String?
+
+            // Flagged #1: HIGH: `RemoteError` decode fails when `detail` is non-string JSON, silently discarding all registry error context
+            // `detail` is declared as `String?`, so `JSONDecoder` throws a type-mismatch error when a registry returns a non-string value for that field (e.g. Docker Hub returns an array for `UNAUTHORIZED` responses: `"detail":[{"Type":"repository","Name":"ubuntu","Action":"pull"}]`). Because `fromResponseBody` wraps the entire decode in `try?`, a single non-string `detail` causes the whole `ErrorResponse` to be discarded and `fromResponseBody` returns `nil`. Every call site across `RegistryClient`, `RegistryClient+Fetch`, `RegistryClient+Push`, `RegistryClient+Referrers`, and `RegistryClient+Catalog` then receives `reason: nil`, and the thrown error surfaces as "Reason: Unknown" instead of the actual registry error message.
+            init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.code = try container.decode(String.self, forKey: .code)
+                self.message = try container.decode(String.self, forKey: .message)
+                self.detail = try? container.decode(String.self, forKey: .detail)
+            }
         }
 
         internal static func fromResponseBody(_ body: HTTPClientResponse.Body) async -> ErrorResponse? {

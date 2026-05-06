@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:29 — 0 critical, 0 high, 1 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -18,11 +19,14 @@ import Foundation
 
 extension FileManager {
     /// Returns a unique temporary directory to use.
-    public func uniqueTemporaryDirectory(create: Bool = true) -> URL {
+    // Flagged #1 (1 of 2): MEDIUM: `uniqueTemporaryDirectory(create:)` silently returns non-existent directory on creation failure
+    // `try?` discards any error thrown by `createDirectory(at:withIntermediateDirectories:attributes:)`. When `create: true` and directory creation fails, the function returns a URL pointing to a directory that was never created, with no indication of failure to the caller.
+    public func uniqueTemporaryDirectory(create: Bool = true) throws -> URL {
         let tempDirectoryURL = temporaryDirectory
         let uniqueDirectoryURL = tempDirectoryURL.appendingPathComponent(UUID().uuidString)
         if create {
-            try? createDirectory(at: uniqueDirectoryURL, withIntermediateDirectories: true, attributes: nil)
+            // Flagged #1 (2 of 2)
+            try createDirectory(at: uniqueDirectoryURL, withIntermediateDirectories: true, attributes: nil)
         }
         return uniqueDirectoryURL
     }

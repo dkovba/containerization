@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 14:29 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -186,8 +187,10 @@ struct FileDescriptorPathSecureTests {
         }
     }
 
+    // Flagged #1: LOW: `testPathsWithDotNormalization` has wrong display name, duplicating `testPathsWithDotDotNormalization`'s name
+    // The `@Test` display name for `testPathsWithDotNormalization` was `"Test paths with .. that normalize to valid paths"`, which is incorrect on two counts: (1) the test cases exercise single-dot (`.`) normalization (`./safe`, `./a/./b`), not double-dot (`..`); (2) the string is identical to the display name of the separate `testPathsWithDotDotNormalization` test (line 239), creating a duplicate display name collision in the test suite.
     @Test(
-        "Test paths with .. that normalize to valid paths",
+        "Test paths with . that normalize to valid paths",
         arguments: [
             // Paths with .. that should normalize and succeed
             ("./safe", "safe"),  // Leading ./ normalizes to safe
@@ -236,8 +239,10 @@ struct FileDescriptorPathSecureTests {
             "Expected file at normalized path: \(expectedPath.string)")
     }
 
+    // Flagged #2: LOW: `testPathsWithDotDotNormalization` has a display name that contradicts the test's expected behavior
+    // The `@Test` display name was `"Test paths with .. that normalize to valid paths"`, but the test body calls `#expect(throws: SecurePathError.invalidRelativePath.self)` — it expects every argument path to be **rejected** with an error. The name implies these paths succeed (normalize to valid destinations), which is the exact opposite of what the test asserts. The inline comment `// Paths with .. that should fail` further confirms the mismatch.
     @Test(
-        "Test paths with .. that normalize to valid paths",
+        "Test paths with .. that are rejected as invalid",
         arguments: [
             // Paths with .. that should fail
             ("safe/.."),  // Normalizes to empty (current dir)

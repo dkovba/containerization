@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 20:35 — 0 critical, 0 high, 0 medium, 1 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -468,7 +469,10 @@ extension Socket {
     }
 
     static func _errnoString(_ err: Int32?) -> String {
-        String(validatingCString: strerror(errno)) ?? "error: \(errno)"
+        // Flagged #1: LOW: `_errnoString` ignores its `err` parameter and always reads the global `errno`
+        // `_errnoString(_ err: Int32?)` accepts an errno value as its argument but never uses it. Both `strerror(errno)` and the fallback `"error: \(errno)"` read the global `errno` directly, so the formatted string reflects whatever `errno` happens to be at the moment `strerror` is called, not the value that was captured by the caller.
+        let e = err ?? errno
+        return String(validatingCString: strerror(e)) ?? "error: \(e)"
     }
 }
 

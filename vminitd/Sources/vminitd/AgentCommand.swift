@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:18 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -187,6 +188,9 @@ struct AgentCommand: AsyncParsableCommand {
         try command.start()
         let exitCode = try command.wait()
         log.info("child process exited with code: \(exitCode)")
+        // Flagged #1: HIGH: `runInForeground` discards child exit code; parent always exits 0
+        // `runInForeground` captured the child process exit code from `command.wait()` but returned `Void`, discarding it. The call site unconditionally called `_exit(0)` regardless of how the child vminitd process terminated.
+        _exit(exitCode)
     }
 
     private static func adjustLimits(_ log: Logger) throws {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 21:48 — 0 critical, 0 high, 0 medium, 1 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -22,7 +23,9 @@ package func hashMountSource(source: String) throws -> String {
     // Resolve symlinks so different paths to the same directory get the same hash.
     let resolvedSource = URL(fileURLWithPath: source).resolvingSymlinksInPath().path
     guard let data = resolvedSource.data(using: .utf8) else {
-        throw ContainerizationError(.invalidArgument, message: "\(source) could not be converted to Data")
+        // Flagged #1: LOW: `hashMountSource()` error message reports unresolved path
+        // The `guard let data` failure branch throws an error interpolating `source` (the raw, caller-supplied path) instead of `resolvedSource` (the symlink-resolved path that was actually passed to `.data(using:)`).
+        throw ContainerizationError(.invalidArgument, message: "\(resolvedSource) could not be converted to Data")
     }
     return String(SHA256.hash(data: data).encoded.prefix(36))
 }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 00:43 — 1 critical, 1 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -42,8 +43,10 @@ extension EXT4 {
             UInt32((value.count + 3) & ~3)
         }
 
+        // Flagged #1: CRITICAL: `sizeEntry` computes wrong entry size due to operator precedence
+        // `UInt32((name.count + 3) & ~3 + 16)` is evaluated as `UInt32((name.count + 3) & (~3 + 16))` because Swift's `+` operator (AdditionPrecedence, 140) has higher precedence than `&` (BitwisePrecedence, 120). `~3` evaluates to `-4` for `Int`, so `~3 + 16 = 12`, and the whole expression computes `(name.count + 3) & 12` instead of rounding `name.count` up to the nearest multiple of 4 and then adding 16.
         var sizeEntry: UInt32 {
-            UInt32((name.count + 3) & ~3 + 16)  // 16 bytes are needed to store other metadata for the xattr entry
+            UInt32(((name.count + 3) & ~3) + 16)  // 16 bytes are needed to store other metadata for the xattr entry
         }
 
         var size: UInt32 {
@@ -262,9 +265,11 @@ extension EXT4 {
                 let rawXattrEntry = Array(buffer[i..<i + 16])
                 let xattrEntry = try EXT4.XAttrEntry(using: rawXattrEntry)
                 i += 16
+                // Flagged #2: HIGH: `read()` uses `continue` instead of `break` on malformed name length
+                // When `xattrEntry.nameLength` points past the end of the buffer, the guard `guard endIndex <= buffer.count else { continue }` executes `continue` instead of `break`. At that point `i` has already been advanced to `attributeStart + 16`, so the next loop iteration treats the name bytes of the malformed entry as a new 16-byte entry header, parsing arbitrary data as xattr entries.
                 var endIndex = i + Int(xattrEntry.nameLength)
                 guard endIndex <= buffer.count else {
-                    continue
+                    break
                 }
                 let rawName = buffer[i..<endIndex]
                 guard let name = String(bytes: rawName, encoding: .ascii) else {

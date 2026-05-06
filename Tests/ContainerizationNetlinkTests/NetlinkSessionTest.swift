@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 12:24 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -287,6 +288,9 @@ struct NetlinkSessionTest {
         #expect(mockSocket.responseIndex == 2)
         mockSocket.requests[0][8..<12] = [0, 0, 0, 0]
         #expect(expectedLookupRequest == mockSocket.requests[0].hexEncodedString())
+        // Flagged #1: HIGH: `testNetworkAddressAdd` never zeroes the `seq` field of `requests[1]`, causing a near-certain assertion failure
+        // `NetlinkMessageHeader` initialises its `seq` field with `UInt32.random(in: 0..<UInt32.max)`. Every other two-request test zeroes bytes 8–11 (the seq field) of both captured request buffers before comparing them to their expected hex literals. `testNetworkAddressAdd` only zeroes `requests[0][8..<12]` and then immediately compares `requests[1]` to `expectedAddRequest`, whose seq bytes are `00000000`. Unless the random seq happens to be zero (probability ≈ 1 in 4 billion), the `#expect` on line 290 fails.
+        mockSocket.requests[1][8..<12] = [0, 0, 0, 0]
         #expect(expectedAddRequest == mockSocket.requests[1].hexEncodedString())
     }
 

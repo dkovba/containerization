@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 15:58 — 0 critical, 0 high, 2 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -112,6 +113,11 @@ public struct KeychainHelper: Sendable {
         guard let username = readLine() else {
             throw Self.Error.invalidInput
         }
+        // Flagged #1: MEDIUM: `userPrompt()` accepts an empty username
+        // `userPrompt()` calls `readLine()` and returns whatever it produces, including an empty string `""` when the user presses Enter without typing anything. No guard against an empty result is present, so the empty string is returned as a valid username.
+        guard !username.isEmpty else {
+            throw Self.Error.invalidInput
+        }
         return username
     }
 
@@ -127,6 +133,9 @@ public struct KeychainHelper: Sendable {
         guard let password = readLine() else {
             throw Self.Error.invalidInput
         }
+        // Flagged #2: MEDIUM: `passwordPrompt()` leaves terminal cursor on the password line
+        // `console.disableEcho()` suppresses all terminal output, including the newline produced when the user presses Enter. After `readLine()` returns, the cursor remains on the same line as the password prompt. Any subsequent output (next prompt, error message, etc.) is rendered on that line, garbling the terminal display.
+        print()
         return password
     }
 }

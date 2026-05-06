@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -102,7 +103,9 @@ extension Application {
             @Option(
                 name: .customLong("unpack-path"), help: "Path to a new directory to unpack the image into",
                 transform: { str in
-                    URL(fileURLWithPath: str, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)
+                    // Flagged #1 (1 of 3): MEDIUM: `~` not expanded in path arguments
+                    // Multiple `--path`, `--output`, `--input`, `--unpack-path`, `--kernel`, and mount/add-file arguments pass the raw string to `URL(fileURLWithPath:)` or `Data(contentsOf:)` without first calling `(str as NSString).expandingTildeInPath`. The shell does not expand `~` inside quoted arguments or ArgumentParser-parsed values.
+                    URL(fileURLWithPath: (str as NSString).expandingTildeInPath, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)
                 })
             var unpackPath: String?
 
@@ -129,9 +132,10 @@ extension Application {
                     try await imageStore.pull(reference: normalizedReference, platform: platform, insecure: http, auth: auth)
                 }
 
+                // Flagged #2: MEDIUM: Pull failure reports wrong error code and unhelpful message
+                // When store.pull returns nil, the code prints "image pull failed" and calls Application.exit(withError: POSIXError(.EACCES)). EACCES (permission denied) is semantically wrong for a missing image, and the message provides no reference name.
                 guard let image else {
-                    print("image pull failed")
-                    Application.exit(withError: POSIXError(.EACCES))
+                    throw ContainerizationError(.notFound, message: "image pull returned no result for \(normalizedReference)")
                 }
 
                 var duration = ContinuousClock.now - startTime
@@ -229,7 +233,8 @@ extension Application {
                     try? FileManager.default.removeItem(at: tempDir)
                 }
                 try await store.save(references: reference, out: tempDir, platform: p)
-                let writer = try ArchiveWriter(format: .pax, filter: .none, file: URL(filePath: output))
+                // Flagged #1 (2 of 3)
+                let writer = try ArchiveWriter(format: .pax, filter: .none, file: URL(fileURLWithPath: (output as NSString).expandingTildeInPath))
                 try writer.archiveDirectory(tempDir)
                 try writer.finishEncoding()
                 print("image exported")
@@ -247,7 +252,8 @@ extension Application {
 
             func run() async throws {
                 let store = Application.imageStore
-                let tarFile = URL(fileURLWithPath: input)
+                // Flagged #1 (3 of 3)
+                let tarFile = URL(fileURLWithPath: (input as NSString).expandingTildeInPath)
                 let reader = try ArchiveReader(file: tarFile.absoluteURL)
                 let tempDir = FileManager.default.uniqueTemporaryDirectory()
                 defer {

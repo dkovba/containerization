@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 01:38 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -56,7 +57,9 @@ extension UnsafeRawBufferPointer {
         case .little:
             return self.load(as: T.self)
         case .big:
-            let buffer = Array(self.reversed())
+            // Flagged #1: HIGH: `loadLittleEndian(as:)` loads wrong bytes when buffer is wider than `T`
+            // On big-endian hosts, `Array(self.reversed())` reverses the entire buffer regardless of how many bytes `T` actually occupies.
+            let buffer = Array(self[0..<MemoryLayout<T>.size].reversed())
             return buffer.withUnsafeBytes { ptr in
                 ptr.load(as: T.self)
             }

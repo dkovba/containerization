@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -243,6 +244,15 @@ extension ArchiveReader: Sequence {
             guard c > 0 else { break }
             part.count = c
             entry.append(part)
+            // Flagged #1: HIGH: `readDataForEntry(_:)` uses a shrinking read buffer across loop iterations
+            // `part` is allocated once as `Data(count: bufferSize)`. After each call to
+            // `archive_read_data`, `part.count = c` permanently truncates the `Data` to however
+            // many bytes were returned. On the next iteration `buffer.count` equals the now-smaller
+            // `c` rather than `bufferSize`, so every subsequent `archive_read_data` call is capped
+            // at that reduced size. For any entry whose data spans more than one chunk, any
+            // mid-stream partial read causes all following reads to use a progressively smaller
+            // buffer, silently reading less data per call than intended.
+            part.count = bufferSize
         }
         return entry
     }

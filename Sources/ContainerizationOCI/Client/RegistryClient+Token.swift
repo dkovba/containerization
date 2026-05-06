@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 17:58 — 0 critical, 2 high, 1 medium, 0 low (3 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -92,10 +93,19 @@ struct TokenResponse: Codable, Hashable {
         }
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let issued = isoFormatter.date(from: issuedAt) else {
+        // Flagged #3: MEDIUM: `isValid(scope:)` fails to parse RFC3339 timestamps without fractional seconds
+        // The `ISO8601DateFormatter` is configured with `[.withInternetDateTime, .withFractionalSeconds]`, which requires a sub-second component. If the server returns a valid RFC3339 `issued_at` value that omits fractional seconds (e.g. `"2025-01-01T00:00:00Z"`), `date(from:)` returns `nil` and `isValid` returns `false`.
+        var issued = isoFormatter.date(from: issuedAt)
+        if issued == nil {
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            issued = isoFormatter.date(from: issuedAt)
+        }
+        guard let issued else {
             return false
         }
-        let expiresIn = expiresIn ?? 0
+        // Flagged #1: HIGH: `isValid(scope:)` treats every token without `expiresIn` as immediately expired
+        // `let expiresIn = expiresIn ?? 0` uses `0` as the fallback lifetime. Because `elapsed >= 0` is always true, any `TokenResponse` that omits the `expires_in` field is unconditionally rejected as expired, even when freshly issued.
+        let expiresIn = expiresIn ?? 60
         let now = Date()
         let elapsed = now.timeIntervalSince(issued)
         guard elapsed < Double(expiresIn) else {
@@ -104,7 +114,9 @@ struct TokenResponse: Codable, Hashable {
         if let requiredScope = scope {
             return requiredScope == self.scope
         }
-        return false
+        // Flagged #2: HIGH: `isValid(scope:)` returns `false` when no scope is required
+        // After the expiry check passes, the function reaches `return false` when the `scope` parameter is `nil`. A `nil` scope means the caller imposes no scope restriction, so a non-expired token should be considered valid.
+        return true
     }
 }
 

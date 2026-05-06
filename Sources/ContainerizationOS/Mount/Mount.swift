@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 20:11 — 0 critical, 0 high, 2 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -349,8 +350,10 @@ extension Mount {
 
         if opts.flags & propagationTypes != 0 {
             // Change the propagation type.
-            let pflags = propagationTypes | Int32(MS_REC) | Int32(MS_SILENT)
-            guard _mount("", target, "", UInt(opts.flags & pflags), "") == 0 else {
+            // Flagged #1: MEDIUM: Propagation-change mount drops `MS_REC | MS_SILENT`
+            // `opts.flags & pflags` reduced to `opts.flags & propagationTypes` because `opts.flags` never has `MS_REC`/`MS_SILENT` set, silently discarding them before the `_mount` syscall.
+            let pflags = (opts.flags & propagationTypes) | Int32(MS_REC) | Int32(MS_SILENT)
+            guard _mount("", target, "", UInt(pflags), "") == 0 else {
                 throw Error.errno(errno, "failed propagation change mount")
             }
         }
@@ -380,7 +383,9 @@ extension Mount {
                 } else {
                     mountOpts.flags |= Int32(entry.flag)
                 }
-            } else {
+            // Flagged #2: MEDIUM: `parseMountOptions()` passes `"defaults"` as kernel mount data
+            // The condition `if let entry = Self.flagsDictionary[option], entry.flag != 0` fuses the dictionary lookup with a zero-flag guard; when `option` is `"defaults"` `entry.flag == 0` so the condition is false and `"defaults"` is appended to `mountOpts.data`, causing the kernel `mount(2)` syscall to reject it with EINVAL.
+            } else if Self.flagsDictionary[option] == nil {
                 mountOpts.data.append(option)
             }
         }

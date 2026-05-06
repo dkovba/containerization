@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 16:07 — 0 critical, 0 high, 2 medium, 0 low (2 total)
 // swift-tools-version: 6.2
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
@@ -68,7 +69,9 @@ let package = Package(
                 "ContainerizationEXT4",
             ],
             exclude: [
-                "../Containerization/SandboxContext/SandboxContext.proto"
+                // Flagged #1: MEDIUM: `Containerization` target exclude path uses invalid `..` traversal
+                // The exclude entry `"../Containerization/SandboxContext/SandboxContext.proto"` uses a `..` component, making the path non-relative to the target's own source root (`Sources/Containerization`). SwiftPM requires exclude paths to be relative to the target source directory without upward traversal; this form is rejected by strict SwiftPM validation and produces a package resolution error.
+                "SandboxContext/SandboxContext.proto"
             ]
         ),
         .executableTarget(
@@ -215,7 +218,9 @@ let package = Package(
                 "ContainerizationError",
             ],
             exclude: [
-                "../ContainerizationOS/README.md"
+                // Flagged #2: MEDIUM: `ContainerizationOS` target exclude path uses invalid `..` traversal
+                // The exclude entry `"../ContainerizationOS/README.md"` uses a `..` component, making the path non-relative to the target's own source root (`Sources/ContainerizationOS`). SwiftPM requires exclude paths to be relative to the target source directory without upward traversal; this form is rejected by strict SwiftPM validation and produces a package resolution error.
+                "README.md"
             ]
         ),
         .testTarget(

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 17:26 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -44,7 +45,14 @@ extension RegistryClient {
 
         let result: Index = try await request(components: components, method: .GET, headers: headers) { response in
             if response.status == .notFound {
-                return await self.referrersTagFallback(name: name, digest: digest, artifactType: artifactType)
+                // Flagged #1 (1 of 4): CRITICAL: `referrersTagFallback` swallows `CancellationError`, breaking cooperative cancellation
+                // `referrersTagFallback` was declared `async -> Index` (non-throwing). Both `do/catch`
+                // blocks inside it used a bare `catch` clause that matched every error type — including
+                // `CancellationError` — and returned an empty `Index`. When the enclosing Swift task was
+                // cancelled, `resolve` or `fetch` would throw `CancellationError`, which was silently swallowed
+                // and replaced with an empty-index success result. The call site in `referrers` used plain
+                // `await` (not `try await`), so the compiler also enforced that no error could escape.
+                return try await self.referrersTagFallback(name: name, digest: digest, artifactType: artifactType)
             }
 
             guard response.status == .ok else {
@@ -64,12 +72,16 @@ extension RegistryClient {
     ///
     /// Uses the OCI referrers tag schema: referrers for a digest are stored as an
     /// index at the tag `<algorithm>-<hex>` (e.g., `sha256-abc123...`).
-    private func referrersTagFallback(name: String, digest: String, artifactType: String? = nil) async -> Index {
+    // Flagged #1 (2 of 4)
+    private func referrersTagFallback(name: String, digest: String, artifactType: String? = nil) async throws -> Index {
         let referrerTag = digest.replacingOccurrences(of: ":", with: "-")
 
         let descriptor: Descriptor
         do {
             descriptor = try await resolve(name: name, tag: referrerTag)
+        // Flagged #1 (3 of 4)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return Index(schemaVersion: 2, manifests: [])
         }
@@ -77,6 +89,9 @@ extension RegistryClient {
         let index: Index
         do {
             index = try await fetch(name: name, descriptor: descriptor)
+        // Flagged #1 (4 of 4)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             return Index(schemaVersion: 2, manifests: [])
         }

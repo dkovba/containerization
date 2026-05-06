@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -110,10 +111,13 @@ extension User {
         let content = try String(contentsOf: file, encoding: .ascii)
         let lines = content.components(separatedBy: .newlines)
         for line in lines {
-            guard !line.isEmpty else {
+            // Flagged #1: MEDIUM: `parse()` does not skip whitespace-only lines or comment lines
+            // The loop guard checked `!line.isEmpty` against the raw, un-trimmed line, and did not filter comment lines at all. A line consisting entirely of spaces or tabs passed the guard and was trimmed to `""` before reaching the handler; a line beginning with `#` was forwarded verbatim. Both `User.init(rawString:)` and `Group.init(rawString:)` split on `:` and require exactly 7 or 4 fields respectively. An empty string produces only one field and a comment line contains no `:` delimiters at all, so both cases throw `Error.parseError`. Because callers only catch `Error.missingFile`, this `parseError` propagated uncaught and aborted the entire user/group lookup. The Go `user` package in runc (which this code is modelled on) explicitly skips both kinds of lines, and many passwd/group-file generators emit comment headers.
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty && !trimmed.hasPrefix("#") else {
                 continue
             }
-            try handler(line.trimmingCharacters(in: .whitespaces))
+            try handler(trimmed)
         }
     }
 

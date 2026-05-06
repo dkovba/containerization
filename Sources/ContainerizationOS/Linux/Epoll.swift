@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 19:49 — 0 critical, 2 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -98,11 +99,10 @@ public final class Epoll: Sendable {
         let ctlResult = withUnsafeMutablePointer(to: &event) { ptr in
             epoll_ctl(efd, EPOLL_CTL_ADD, self.eventFD, ptr)
         }
+        // Flagged #1: HIGH: `init()` double-closes `epollFD`/`eventFD` when `epoll_ctl` fails
+        // After `self.epollFD` and `self.eventFD` are both assigned, all stored properties of the instance are initialized. When the `epoll_ctl` guard fires, the original code calls `close(evfd)` and `close(efd)` explicitly before throwing. Because all stored properties are already set, Swift's ARC invokes `deinit` as part of unwinding the failed initializer, and `deinit` calls `close(epollFD)` and `close(eventFD)` a second time — double-closing both descriptors.
         guard ctlResult == 0 else {
-            let ctlErrno = POSIXError.fromErrno()
-            close(evfd)
-            close(efd)
-            throw ctlErrno
+            throw POSIXError.fromErrno()
         }
     }
 
@@ -113,7 +113,13 @@ public final class Epoll: Sendable {
 
     /// Register a file descriptor for edge-triggered monitoring.
     public func add(_ fd: Int32, mask: Mask) throws {
-        guard fcntl(fd, F_SETFL, O_NONBLOCK) == 0 else {
+        // Flagged #2: HIGH: `add()` overwrites all file-status flags when setting `O_NONBLOCK`
+        // `fcntl(fd, F_SETFL, O_NONBLOCK)` replaces the entire set of file-status flags with only `O_NONBLOCK`. Any flag already set on the descriptor — such as `O_APPEND` — is silently cleared, corrupting the file descriptor's behavior for the rest of its lifetime.
+        let flags = fcntl(fd, F_GETFL)
+        guard flags != -1 else {
+            throw POSIXError.fromErrno()
+        }
+        guard fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw POSIXError.fromErrno()
         }
 

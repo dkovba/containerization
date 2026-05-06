@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:43 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -160,7 +161,9 @@ final class IOPair: Sendable {
                     case .again:
                         if mask.isHangup && !ignoreHup {
                             self.logger?.error("received EPOLLHUP and EAGAIN exiting")
-                            self.close()
+                            // Flagged #1: CRITICAL: `relay()` deadlocks when EPOLLHUP arrives with EAGAIN
+                            // Inside the epoll callback, the code calls `self.close()` while already holding `self.io`'s `Mutex` lock. `self.close()` attempts to acquire the same lock via `self.io.withLock`, causing an unrecoverable deadlock.
+                            io.close(logger: self.logger)
                         }
                         return
                     default:

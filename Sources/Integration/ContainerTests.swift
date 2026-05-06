@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 9 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -154,8 +155,10 @@ extension IntegrationSuite {
             let status = try await container.wait()
             try await container.stop()
 
+            // Flagged #8: LOW: `testProcessEchoHi()` reports wrong expected exit code in assertion message
+            // The `guard` checks `status.exitCode == 0` (correct — `echo` exits with 0), but the error message on failure reads `"process status \(status) != 1"`. When the assertion fires the message misleadingly reports the expected code as 1 instead of 0, making test failures harder to diagnose.
             guard status.exitCode == 0 else {
-                throw IntegrationError.assert(msg: "process status \(status) != 1")
+                throw IntegrationError.assert(msg: "process status \(status) != 0")
             }
 
             guard String(data: buffer.data, encoding: .utf8) == "hi\n" else {
@@ -231,6 +234,9 @@ extension IntegrationSuite {
                 try await container.stop()
             }
         } catch {
+            // Flagged #2: MEDIUM: `testMultipleConcurrentProcesses()` leaks container VM on failure
+            // The `catch` block only rethrows the error without first calling `container.stop()`. If any operation inside the `do` block throws (e.g., exec creation or task group failure) before the `container.stop()` at the end of the task group closure is reached, the container's VM is never torn down.
+            try? await container.stop()
             throw error
         }
     }
@@ -299,6 +305,11 @@ extension IntegrationSuite {
             try await container.kill(SIGKILL)
             try await container.wait()
             try await container.stop()
+        // Flagged #3: MEDIUM: `testMultipleConcurrentProcessesOutputStress()` has no error-path cleanup
+        // The outer `do` block had no `catch` clause at all. The container runs `/bin/sleep 1000` as its main process, so it stays alive for the duration of the test. Any failure inside the `do` block — a failed exec, a mismatched hash, or a task group error — causes the function to throw without ever calling `container.stop()`, leaving the VM running.
+        } catch {
+            try? await container.stop()
+            throw error
         }
     }
 
@@ -395,6 +406,9 @@ extension IntegrationSuite {
         } catch {
             return
         }
+        // Flagged #4: MEDIUM: `testProcessUser()` leaks container VM when start unexpectedly succeeds
+        // The fourth sub-test in `testProcessUser()` — which verifies that `start()` fails for a non-existent username — calls `container.create()` and then `container.start()` inside a `do/catch`. If `start()` throws (the expected path) the function returns immediately, which is correct. But if `start()` unexpectedly succeeds, execution falls through directly to `throw IntegrationError.assert(msg: "container start should have failed")` without first calling `container.stop()`, leaving the container's VM running.
+        try await container.stop()
         throw IntegrationError.assert(msg: "container start should have failed")
     }
 
@@ -666,6 +680,9 @@ extension IntegrationSuite {
                     throw SkipTest(reason: err.message)
                 }
             }
+            // Flagged #5: MEDIUM: `testNestedVirtualizationEnabled()` silently swallows non-`.unsupported` errors
+            // The `catch` block checks whether the error is a `ContainerizationError` with code `.unsupported` and throws `SkipTest` in that case, but does nothing for any other error — there is no fallthrough `throw`. If `container.create()` or `container.start()` throws any other error, it is silently discarded and execution falls through to `container.wait()` on a container that was never successfully started.
+            throw error
         }
 
         let status = try await container.wait()
@@ -739,17 +756,22 @@ extension IntegrationSuite {
         try await container.start()
 
         let status = try await container.wait()
+
+        // Flagged #6: MEDIUM: `testContainerStopIdempotency()` leaks container VM when exit code is unexpected
+        // `container.wait()` is called and its result stored in `status`, but the `guard status.exitCode == 0` check appears before the two `try await container.stop()` calls. If the guard fires (unexpected non-zero exit code), the function throws without ever calling `container.stop()`, leaving the container's VM running.
+        try await container.stop()
+        try await container.stop()
+
         guard status.exitCode == 0 else {
             throw IntegrationError.assert(msg: "process status \(status) != 0")
         }
 
-        try await container.stop()
-        try await container.stop()
-
         let output = String(data: buffer.data, encoding: .utf8)
+        // Flagged #9: LOW: `testContainerStopIdempotency()` reports wrong expected output in assertion message
+        // The `guard` checks `output == "please stop me\n"` (correct — the container runs `/bin/echo "please stop me"`), but the error message on failure reads `"process should have returned 'ContainerManager test' != ..."`. This is a copy-paste error from `testContainerManagerCreate()`, which uses a different echo argument. When the assertion fires the message misleadingly reports the expected output as "ContainerManager test" instead of "please stop me", making test failures harder to diagnose.
         guard output == "please stop me\n" else {
             throw IntegrationError.assert(
-                msg: "process should have returned 'ContainerManager test' != '\(output ?? "nil")'")
+                msg: "process should have returned 'please stop me' != '\(output ?? "nil")'")
         }
     }
 
@@ -778,16 +800,21 @@ extension IntegrationSuite {
         try await container.start()
 
         var status = try await container.wait()
+        // Flagged #7: MEDIUM: `testContainerReuse()` leaks container VM when first-run exit code is unexpected
+        // After the first run of the container, `container.wait()` is called and the result is stored in `status`, but `container.stop()` is only called after the subsequent `guard status.exitCode == 0` check. If the guard fires (unexpected non-zero exit code), the function throws without ever calling `container.stop()`, leaving the container's VM running. The second run in the same function correctly calls `stop()` before its guard check, making the two runs inconsistent.
+        try await container.stop()
         guard status.exitCode == 0 else {
             throw IntegrationError.assert(msg: "process status \(status) != 0")
         }
-        try await container.stop()
 
         try await container.create()
         try await container.start()
 
         // Wait for completion.. again.
         status = try await container.wait()
+        // Flagged #1: HIGH: `testContainerReuse()` never stops the container after its second run
+        // After restarting the container for its second run and calling `container.wait()`, the function proceeds directly to output validation and returns without ever calling `container.stop()`. The container's VM is left running until the `defer { try? manager.delete(id) }` fires at the end of the enclosing scope, but that only removes the logical record — the VM itself is not stopped.
+        try await container.stop()
         guard status.exitCode == 0 else {
             throw IntegrationError.assert(msg: "process status \(status) != 0")
         }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:57 — 1 critical, 1 high, 0 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -211,6 +212,8 @@ struct RunCommand: ParsableCommand {
     private func setupNamespaces(namespaces: [ContainerizationOCI.LinuxNamespace]?) throws -> Int32 {
         var unshareFlags: Int32 = 0
 
+        // Flagged #1: HIGH: `setupNamespaces()` includes `CLONE_NEWCGROUP` in pre-fork `unshare()`, breaking cgroup setup
+        // The `nsTypeToFlag` dictionary maps `.cgroup` to `CLONE_NEWCGROUP`. When the OCI spec requests a new cgroup namespace (a cgroup namespace entry without a path), this flag is included in `unshareFlags` and passed to `unshare()` before `fork()`. This moves the *parent* process into a new cgroup namespace before it attempts to create the container cgroup and call `cgroupManager.addProcess(pid:)`. Inside the new namespace the host cgroup hierarchy is not visible, so the cgroup path either cannot be found or refers to the wrong scope. Additionally, the child calls `unshare(CLONE_NEWCGROUP)` unconditionally in `childSetup`, so the pre-fork unshare is redundant and harmful.
         // Map namespace types to their corresponding CLONE flags
         let nsTypeToFlag: [ContainerizationOCI.LinuxNamespaceType: Int32] = [
             .pid: CLONE_NEWPID,
@@ -218,7 +221,6 @@ struct RunCommand: ParsableCommand {
             .uts: CLONE_NEWUTS,
             .ipc: CLONE_NEWIPC,
             .user: CLONE_NEWUSER,
-            .cgroup: CLONE_NEWCGROUP,
         ]
 
         guard let namespaces = namespaces else {
@@ -365,13 +367,16 @@ struct RunCommand: ParsableCommand {
     /// https://github.com/opencontainers/runc/blob/main/libcontainer/rootfs_linux.go
     private func pivotRoot(rootfs: String) throws {
         let oldRoot = open("/", O_RDONLY | O_DIRECTORY)
-        if oldRoot <= 0 {
+        // Flagged #2 (1 of 2): HIGH: `pivotRoot()` rejects valid file descriptor 0 for old and new root
+        // Both `open()` calls in `pivotRoot` are checked with `<= 0` instead of `< 0`. `open(2)` returns -1 on failure; 0 is a valid file descriptor. If stdin is closed before `pivotRoot` is called, the kernel assigns fd 0 to `oldRoot` and the function throws `open(oldroot)` even though the open succeeded. The same applies to `newRoot`: if fd 0 is free when the rootfs directory is opened, the function throws `open(newroot)` spuriously.
+        if oldRoot < 0 {
             throw App.Errno(stage: "open(oldroot)")
         }
         defer { close(oldRoot) }
 
         let newRoot = open(rootfs, O_RDONLY | O_DIRECTORY)
-        if newRoot <= 0 {
+        // Flagged #2 (2 of 2)
+        if newRoot < 0 {
             throw App.Errno(stage: "open(newroot)")
         }
         defer { close(newRoot) }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 20:30 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -277,14 +278,17 @@ public final class BidirectionalRelay: Sendable {
         }
     }
 
+    // Flagged #1: CRITICAL: `closeBothFds()` double-closes `fd1` and `fd2` when `stop()` is called
+    // When `stop()` cancels both dispatch sources, both cancel handlers fire asynchronously on the serial queue. Each handler checks the other source's `isCancelled` property (which is already `true` because `stop()` cancelled both before returning), so both handlers call `closeBothFds()`. In the original, `close(fd1)` and `close(fd2)` are called *before* the `completionState.withLock` guard, meaning the guard only prevents `c.resume()` from being called twice — the `close()` calls are unprotected and execute twice. A double-close can silently close an unrelated file descriptor that the OS has reassigned the same number to after the first close.
     private func closeBothFds() {
-        log?.debug(
-            "close file descriptors",
-            metadata: ["fd1": "\(fd1)", "fd2": "\(fd2)"]
-        )
-        close(fd1)
-        close(fd2)
         completionState.withLock { state in
+            if case .completed = state { return }
+            log?.debug(
+                "close file descriptors",
+                metadata: ["fd1": "\(fd1)", "fd2": "\(fd2)"]
+            )
+            close(fd1)
+            close(fd2)
             if case .waiting(let c) = state {
                 c.resume()
             }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 7 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -343,9 +344,12 @@ extension LinuxPod {
             let creationConfig = StandardVMConfig(configuration: vmConfig)
             let vm = try await self.vmm.create(config: creationConfig)
             let relayManager = UnixSocketRelayManager(vm: vm)
-            try await vm.start()
 
             do {
+                // Flagged #1: HIGH: `LinuxPod.start()` and `LinuxContainer.start()` have multiple calls outside the cleanup `do` block, leaking VM and relay manager on failure
+                // Three related defects, all causing the VM and relay manager to be leaked when `start()` fails: (1) In both `LinuxPod` and `LinuxContainer`, `try await vm.start()` was called before the enclosing `do` block whose `catch` handler stops the relay manager and VM (`try? await relayManager.stopAll(); try? await vm.stop()`). If `vm.start()` threw, the catch block was bypassed entirely, leaving the newly created VM running and the relay manager's resources allocated. (2) In `LinuxContainer`, `dialAgent()` was likewise called outside the outer `do/catch` cleanup block. Any error thrown by `dialAgent()` escaped upward without triggering the cleanup handler, leaving the relay manager active and the VM running. (3) The `catch` block in `LinuxContainer.start()` called `try? await agent.close()` and `try? await createdState.vm.stop()` but never called `createdState.relayManager.stopAll()`, leaving any already-started socket relays active after a failed start.
+                try await vm.start()
+
                 let containers = state.containers
                 let shareProcessNamespace = self.config.shareProcessNamespace
                 let pauseProcessHolder = Mutex<LinuxProcess?>(nil)
@@ -359,11 +363,15 @@ extension LinuxPod {
                         let pauseID = "pause-\(self.id)"
                         let pauseRootfsPath = "/run/container/\(pauseID)/rootfs"
 
+                        // Flagged #5 (1 of 2): MEDIUM: `LinuxPod` `/sbin` bind mount for the pause container uses an empty type string and may target a non-existent directory
+                        // The `ContainerizationOCI.Mount` used to bind-mount `/sbin` into the pause container rootfs had two defects: (1) `type: ""` (empty string) — the Linux `mount(2)` syscall requires a non-empty filesystem-type argument for non-bind-flag operations; passing an empty string causes the guest kernel to reject the call with `EINVAL`. (2) The mount targeted `"\(pauseRootfsPath)/sbin"` (where `pauseRootfsPath` is `/run/container/\(pauseID)/rootfs`) without first ensuring the destination directory existed; a bind mount to a non-existent path also fails immediately in the guest kernel.
+                        try await agent.mkdir(path: "\(pauseRootfsPath)/sbin", all: true, perms: 0o755)
                         // Bind mount /sbin into the pause container rootfs.
                         // This is where the guest agent lives.
                         try await agent.mount(
                             ContainerizationOCI.Mount(
-                                type: "",
+                                // Flagged #5 (2 of 2)
+                                type: "bind",
                                 source: "/sbin",
                                 destination: "\(pauseRootfsPath)/sbin",
                                 options: ["bind"]
@@ -453,7 +461,9 @@ extension LinuxPod {
                         if let ipv4Gateway = i.ipv4Gateway {
                             if !i.ipv4Address.contains(ipv4Gateway) {
                                 self.logger?.debug("gateway \(ipv4Gateway) is outside subnet \(i.ipv4Address), adding a route first")
-                                try await agent.routeAddLink(name: name, dstIPv4Addr: ipv4Gateway, srcIPv4Addr: nil)
+                                // Flagged #6: MEDIUM: `LinuxPod` adds a link-scoped gateway route without a source address
+                                // When a network interface's gateway fell outside its subnet, `routeAddLink` was called with `srcIPv4Addr: nil`. On Linux, a link-scoped route without an explicit source address may be rejected or may select the wrong source, preventing the subsequent default route from being installed.
+                                try await agent.routeAddLink(name: name, dstIPv4Addr: ipv4Gateway, srcIPv4Addr: i.ipv4Address.address)
                             }
                             try await agent.routeAddDefault(name: name, ipv4Gateway: ipv4Gateway)
                         } else {
@@ -645,6 +655,9 @@ extension LinuxPod {
             do {
                 // Check if the vm is even still running
                 if createdState.vm.state == .stopped {
+                    // Flagged #7: MEDIUM: `LinuxPod` leaves a stale `process` reference in container state when the VM is already stopped
+                    // When `stopContainer` detected that the VM had already stopped, it set `container.state = .stopped` and returned without clearing `container.process`. The stale non-nil process reference remained associated with the stopped container.
+                    container.process = nil
                     container.state = .stopped
                     state.containers[containerID] = container
                     return
@@ -668,6 +681,9 @@ extension LinuxPod {
                 container.state = .stopped
                 state.containers[containerID] = container
             } catch {
+                // Flagged #2: HIGH: `LinuxPod` leaks the guest process when an individual container stop fails
+                // The per-container stop sequence (wait → umount → delete) ran the happy-path `process.delete()` call at line 666 but omitted a corresponding `process.delete()` call in the `catch` block. If any step before `process.delete()` threw (e.g. wait timeout, umount RPC error), the guest-agent process slot was never freed.
+                try? await process.delete()
                 container.state = .errored
                 container.process = nil
                 state.containers[containerID] = container
@@ -683,7 +699,9 @@ extension LinuxPod {
             let createdState = try state.phase.createdState("stop")
 
             do {
-                try await createdState.relayManager.stopAll()
+                // Flagged #3: HIGH: `LinuxPod.stop()` aborts on relay manager error, leaving all containers and the VM running
+                // `stop()` called `try await createdState.relayManager.stopAll()` with a bare `try`. Any error thrown by `stopAll()` immediately propagated to the outer `catch`, which called `vm.stop()` and set the phase to `.errored` — skipping the entire per-container stop loop and pause-process cleanup.
+                try? await createdState.relayManager.stopAll()
 
                 // Stop all containers
                 let containerIDs = Array(state.containers.keys)
@@ -719,6 +737,16 @@ extension LinuxPod {
                     }
                 }
 
+                // Flagged #4: HIGH: `LinuxPod.stop()` leaks the pause process — teardown calls are missing and the agent connection is already closed before they would run
+                // Two complementary defects that together ensure the pause process is never cleaned up when a pod stops: (1) `stop()` never called `kill()`, `wait()`, or `delete()` on the pause process — those cleanup operations were simply absent from the teardown sequence. (2) The pause container's `LinuxProcess` was constructed in `start()` with the `agent` parameter from the `vm.withAgent { agent in … }` closure. The `withAgent` helper closes the underlying agent connection when its closure returns; by the time `stop()` is called, that connection is already closed. Even after adding the missing kill/wait/delete calls (defect 1), every `try?` call against the pause process in `stop()` silently fails because the underlying RPC connection is closed.
+                if let pauseProcess = state.pauseProcess {
+                    if createdState.vm.state != .stopped {
+                        try? await pauseProcess.kill(SIGKILL)
+                        _ = try? await pauseProcess.wait(timeoutInSeconds: 3)
+                    }
+                    try? await pauseProcess.delete()
+                    state.pauseProcess = nil
+                }
                 try await createdState.vm.stop()
                 state.phase = .initialized
             } catch {

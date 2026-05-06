@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -52,20 +53,22 @@ public final class LinuxProcess: Sendable {
         var stdout: FileHandle?
         var stderr: FileHandle?
 
+        // Flagged #2: MEDIUM: `LinuxProcess.IOState.close()` clears readability handlers after closing and stops on first error
+        // Two defects in `close()`: (1) Each file handle was closed (`try stdin.close()`) before its `readabilityHandler` was set to `nil`. A dispatch queue could deliver a pending readability event between the two operations, calling the handler with an already-closed fd. (2) `close()` called `try stdin.close()`, then `try stdout.close()`, then `try stderr.close()` sequentially; a throw from any earlier close aborted the remaining closes.
         mutating func close() throws {
             if let stdin {
-                try stdin.close()
                 stdin.readabilityHandler = nil
+                try? stdin.close()
                 self.stdin = nil
             }
             if let stdout {
-                try stdout.close()
                 stdout.readabilityHandler = nil
+                try? stdout.close()
                 self.stdout = nil
             }
             if let stderr {
-                try stderr.close()
                 stderr.readabilityHandler = nil
+                try? stderr.close()
                 self.stderr = nil
             }
         }
@@ -228,6 +231,8 @@ extension LinuxProcess {
                     }
 
                     try await self._closeStdin()
+                } catch is CancellationError {
+                    return
                 } catch {
                     self.logger?.error("failed to close stdin: \(error)")
                 }
@@ -247,7 +252,9 @@ extension LinuxProcess {
                 listeners[1] = try self.vm.listen(stdout.port)
             }
             if let stderr = self.ioSetup.stderr {
-                if spec.process!.terminal {
+                // Flagged #1: CRITICAL: `LinuxProcess.start()` crashes with a fatal error on nil `spec.process` when stderr is configured
+                // The terminal-mode validation check used `spec.process!.terminal`, force-unwrapping the optional `spec.process` field of the OCI runtime spec. If a container spec had `process` set to `nil` and a non-nil `stderr` IO configuration, the force-unwrap trapped with a fatal error.
+                if spec.process?.terminal == true {
                     throw ContainerizationError(
                         .invalidArgument,
                         message: "stderr should not be configured with terminal=true"
@@ -256,7 +263,7 @@ extension LinuxProcess {
                 listeners[2] = try self.vm.listen(stderr.port)
             }
 
-            let t = Task {
+            let t = Task { [listeners] in
                 try await self.setupIO(listeners: listeners)
             }
 
@@ -291,6 +298,8 @@ extension LinuxProcess {
                 )
                 $0.pid = pid
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             if let err = error as? ContainerizationError {
                 throw err
@@ -311,6 +320,8 @@ extension LinuxProcess {
                 containerID: self.owningContainer,
                 signal: signal
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ContainerizationError(
                 .internalError,
@@ -329,6 +340,8 @@ extension LinuxProcess {
                 columns: UInt32(to.width),
                 rows: UInt32(to.height)
             )
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ContainerizationError(
                 .internalError,
@@ -338,12 +351,18 @@ extension LinuxProcess {
         }
     }
 
+    // Flagged #3: MEDIUM: `LinuxProcess.closeStdin` leaks the stdin relay task when `_closeStdin` throws
+    // `closeStdin()` cancelled `stdinRelay` only after `_closeStdin()` returned successfully. If `_closeStdin()` threw, the relay cancellation was skipped and the stdin relay task continued running with its file descriptors open.
     public func closeStdin() async throws {
-        do {
-            try await self._closeStdin()
+        defer {
             self.state.withLock {
                 $0.stdinRelay?.cancel()
             }
+        }
+        do {
+            try await self._closeStdin()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ContainerizationError(
                 .internalError,
@@ -371,6 +390,8 @@ extension LinuxProcess {
             )
             await self.waitIoComplete()
             return exitStatus
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             if error is ContainerizationError {
                 throw error
@@ -438,11 +459,15 @@ extension LinuxProcess {
                 containerID: self.owningContainer
             )
         } catch {
+            let isCancellation = error is CancellationError
             self.state.withLock {
                 $0.stdinRelay?.cancel()
                 try? $0.stdio.close()
             }
             try? await self.agent.close()
+            if isCancellation {
+                throw CancellationError()
+            }
             throw ContainerizationError(
                 .internalError,
                 message: "failed to delete process",
@@ -466,6 +491,8 @@ extension LinuxProcess {
 
         do {
             try await self.agent.close()
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ContainerizationError(
                 .internalError,

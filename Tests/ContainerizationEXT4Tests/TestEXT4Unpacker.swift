@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 06:35 — 0 critical, 0 high, 1 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -30,6 +31,9 @@ struct Ext4UnpackerTests {
     final class MockEXT4Unpacker {
         static func Unpack(index: String, fsPath: FilePath) async throws {
             let fs = try EXT4.Formatter(fsPath)
+            // Flagged #1: MEDIUM: `EXT4.Formatter` not closed when `unpack` throws
+            // `MockEXT4Unpacker.Unpack` creates an `EXT4.Formatter` and calls `try fs.close()` only at the end of the function. If any `try await fs.unpack(source:)` call throws an error, the function exits early and `close()` is never called, leaking the underlying file descriptor.
+            defer { try? fs.close() }
             let bundle = Bundle.module
             guard let indexPath = bundle.url(forResource: index, withExtension: nil) else {
                 throw NSError(domain: "indexPath not found", code: 1)

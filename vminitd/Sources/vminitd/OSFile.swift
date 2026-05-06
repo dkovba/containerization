@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:11 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -60,7 +61,9 @@ struct OSFile: Sendable {
                 buffer.count - bytesRead
             )
             if n == -1 {
-                if errno == EAGAIN || errno == EIO {
+                // Flagged #1 (1 of 2): HIGH: `read()` and `write()` treat `EIO` as a retriable condition
+                // Both `read()` and `write()` use the condition `errno == EAGAIN || errno == EIO` to map errors to the `.again` action. `EIO` is not a transient, retriable condition — on Linux it is returned permanently when, for example, the slave end of a PTY has been closed. Treating it as `.again` causes the caller to retry indefinitely, spinning forever.
+                if errno == EAGAIN {
                     return (bytesRead, .again)
                 }
                 return (bytesRead, .error(errno))
@@ -91,14 +94,20 @@ struct OSFile: Sendable {
                 buffer.count - bytesWrote
             )
             if n == -1 {
-                if errno == EAGAIN || errno == EIO {
-                    return (bytesWrote, .again)
+                // Flagged #1 (2 of 2)
+                if errno == EAGAIN {
+                }
+                // Flagged #2 (1 of 2): MEDIUM: `write()` detects broken pipe via `n == 0` instead of `errno == EPIPE`
+                // The code returns `.brokenPipe` when `write()` returns `0`. On POSIX, `write()` signals a broken pipe by returning `-1` with `errno == EPIPE`, not by returning `0`.
+                if errno == EPIPE {
+                    return (bytesWrote, .brokenPipe)
                 }
                 return (bytesWrote, .error(errno))
             }
 
+            // Flagged #2 (2 of 2)
             if n == 0 {
-                return (bytesWrote, .brokenPipe)
+                continue
             }
 
             bytesWrote += n

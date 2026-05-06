@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -49,7 +50,9 @@ public struct Path {
             return nil
         }
 
-        for var lookdir in path.split(separator: ":") {
+        // Flagged #1: LOW: `lookPath()` silently ignores empty PATH entries (current directory never searched)
+        // `path.split(separator: ":")` uses `omittingEmptySubsequences: true` (the Swift default), so empty entries in the PATH string are dropped before the loop body runs. The `if lookdir.isEmpty { lookdir = "." }` guard is therefore dead code. POSIX defines an empty PATH entry as meaning the current working directory, so binaries in `.` are never found.
+        for var lookdir in path.split(separator: ":", omittingEmptySubsequences: false) {
             if lookdir.isEmpty {
                 lookdir = "."
             }

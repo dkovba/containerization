@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:15 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -112,10 +113,13 @@ public enum CIDR: CustomStringConvertible, Equatable, Sendable, Hashable {
     @inlinable
     public func contains(_ ip: IPAddress) -> Bool {
         switch (self, ip) {
+        // Flagged #1 (1 of 2): HIGH: `contains(_:)` always returns false when CIDR was constructed from a host address
+        // `network.value` is compared directly against the masked incoming address without first masking `network.value`, so host bits in the stored address cause every membership test to fail
         case (.v4(let network, let prefix), .v4(let ip)):
-            return network.value == (ip.value & prefix.prefixMask32)
+            return (network.value & prefix.prefixMask32) == (ip.value & prefix.prefixMask32)
+        // Flagged #1 (2 of 2)
         case (.v6(let network, let prefix), .v6(let ip)):
-            return (network.zone == ip.zone) && (network.value == (ip.value & prefix.prefixMask128))
+            return (network.zone == ip.zone) && ((network.value & prefix.prefixMask128) == (ip.value & prefix.prefixMask128))
         default:
             return false
         }

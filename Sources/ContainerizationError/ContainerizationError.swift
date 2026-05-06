@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -20,7 +21,9 @@ import Foundation
 ///
 /// Most API surfaces for the core container/process/agent types will
 /// return a ContainerizationError.
-public struct ContainerizationError: Swift.Error, Sendable {
+// Flagged #2: LOW: `ContainerizationError` missing `Hashable` and `Equatable` conformances
+// The struct implements `hash(into:)` and `static func ==` but does not declare `Hashable` or `Equatable` conformance. Without the conformance declarations, these methods are never invoked by the protocol machinery — `==` comparisons on `ContainerizationError` values fall back to identity (or fail to compile where `Equatable` is required), and the type cannot be used as a dictionary key or `Set` element.
+public struct ContainerizationError: Swift.Error, Sendable, Hashable, Equatable {
     /// A code describing the error encountered.
     public var code: Code
     /// A description of the error.
@@ -116,11 +119,9 @@ extension ContainerizationError {
                 $0[String(describing: $1)] = $1
             }
 
-            let match = values[rawValue]
-            guard let match else {
-                fatalError("invalid code value \(rawValue)")
-            }
-            self.value = match
+            // Flagged #1: HIGH: `Code.init(rawValue:)` calls `fatalError` on unrecognised input
+            // `Code.init(rawValue:)` builds a lookup table from `Value.allCases` and calls `fatalError("invalid code value \(rawValue)")` when the supplied string does not match any known case. This init is used to deserialise error codes from external sources (e.g. gRPC responses). If a newer server sends a code string that the client does not yet know about, the entire process crashes rather than degrading gracefully.
+            self.value = values[rawValue] ?? .unknown
         }
 
         public static var unknown: Self {

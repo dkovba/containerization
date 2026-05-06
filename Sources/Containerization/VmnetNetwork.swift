@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -44,7 +45,12 @@ public struct VmnetNetwork: Network {
         init(cidr: CIDRv4) throws {
             self.cidr = cidr
             self.allocations = .init()
-            let size = Int(cidr.upper.value - cidr.lower.value - 3)
+            // Flagged #1: MEDIUM: VmnetNetwork address allocator pool size is off by one and not validated against zero or negative values for undersized subnets
+            // Two related defects in the pool size computation: (1) The size was computed as `upper - lower - 3`. With the allocator starting at `lower + 2`, the highest address ever allocated was `upper - 2`, incorrectly excluding the last valid host address (`upper - 1`). (2) For subnets with fewer than three host addresses (e.g. a /31 gives `size = -1` with the corrected formula `upper - lower - 2`), the size is zero or negative. A zero size creates an empty allocator (no addresses ever available); a negative size is cast to `UInt32`, wrapping around to a huge value (~4 billion) and causing the allocator to treat an enormous range of address space as valid.
+            let size = Int(cidr.upper.value) - Int(cidr.lower.value) - 2
+            guard size > 0 else {
+                throw ContainerizationError(.invalidArgument, message: "subnet \(cidr) is too small to allocate any addresses")
+            }
             self.addressAllocator = try UInt32.rotatingAllocator(
                 lower: cidr.lower.value + 2,
                 size: UInt32(size)
@@ -56,15 +62,25 @@ public struct VmnetNetwork: Network {
                 throw ContainerizationError(.exists, message: "allocation with id \(id) already exists")
             }
             let index = try addressAllocator.allocate()
-            allocations[id] = index
             let ip = IPv4Address(index)
-            return try CIDRv4(ip, prefix: cidr.prefix)
+            // Flagged #2: MEDIUM: `VmnetNetwork.allocate()` leaks the allocated address index when `CIDRv4` construction fails
+            // `allocate()` called `addressAllocator.allocate()` to obtain an index, then passed it to `CIDRv4(ip, prefix: cidr.prefix)`. The index was added to `allocations` only after `CIDRv4` returned, but if `CIDRv4` threw (e.g. due to an address/prefix mismatch), neither the `allocations` insert nor any `addressAllocator.release()` call was reached. The index was permanently leaked inside the allocator.
+            do {
+                let result = try CIDRv4(ip, prefix: cidr.prefix)
+                allocations[id] = index
+                return result
+            } catch {
+                try? addressAllocator.release(index)
+                throw error
+            }
         }
 
         mutating func release(_ id: String) throws {
             if let index = self.allocations[id] {
+                // Flagged #3: MEDIUM: Stale state not cleared in `VmnetNetwork.release()` when `addressAllocator.release()` throws
+                // `allocations.removeValue(forKey: id)` was placed after `try addressAllocator.release(index)`; if `release()` threw, the stale entry was never removed.
+                defer { allocations.removeValue(forKey: id) }
                 try addressAllocator.release(index)
-                allocations.removeValue(forKey: id)
             }
         }
     }

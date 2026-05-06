@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 15:27 — 0 critical, 0 high, 1 medium, 3 low (4 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -123,7 +124,9 @@ extension ImageStore {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 var iterator = descriptors.makeIterator()
                 // Start initial batch of concurrent downloads based on maxConcurrentDownloads
-                for _ in 0..<self.maxConcurrentDownloads {
+                // Flagged #2: LOW: `fetchAll()` silently skips all downloads when `maxConcurrentDownloads` is zero
+                // The seeding loop `for _ in 0..<self.maxConcurrentDownloads` produces an empty range when `maxConcurrentDownloads` is 0 (or any non-positive value). No tasks are added to the task group, so the `for try await _ in group` drain loop exits immediately with no work done. All descriptors are silently dropped and no content is fetched.
+                for _ in 0..<max(1, self.maxConcurrentDownloads) {
                     if let desc = iterator.next() {
                         group.addTask {
                             try await self.fetch(desc)
@@ -142,8 +145,18 @@ extension ImageStore {
         }
 
         private func fetch(_ descriptor: Descriptor) async throws {
-            if let found = try await self.contentStore.get(digest: descriptor.digest) {
-                try FileManager.default.copyItem(at: found.path, to: ingestDir.appendingPathComponent(descriptor.digest.trimmingDigestPrefix))
+            // Flagged #3: LOW: `fetch()` always misses the content-store cache due to wrong digest format
+            // `contentStore.get(digest: descriptor.digest)` passes the full algorithm-prefixed digest string (e.g. `"sha256:abc123…"`), while every other call to the same method in this file — including `getManifestContent()` — uses `descriptor.digest.trimmingDigestPrefix` (e.g. `"abc123…"`), as do all ingest-dir file-path constructions. Because the content store is keyed by the trimmed form, the lookup in `fetch()` never matches any stored blob.
+            if let found = try await self.contentStore.get(digest: descriptor.digest.trimmingDigestPrefix) {
+                // Flagged #1: MEDIUM: `fetch()` crashes when a cached layer already exists at the destination
+                // `FileManager.default.copyItem(at:to:)` throws `NSFileWriteFileExistsError` when the destination file already exists. Unlike `fetchBlob()`, which handles this error explicitly, `fetch()` had no such guard, causing the import to fail with an unhandled error whenever a layer was already present in the ingest directory (e.g. on a resumed import or when two manifests share a layer).
+                do {
+                    try FileManager.default.copyItem(at: found.path, to: ingestDir.appendingPathComponent(descriptor.digest.trimmingDigestPrefix))
+                } catch let err as NSError {
+                    guard err.code == NSFileWriteFileExistsError else {
+                        throw err
+                    }
+                }
                 await progress?([
                     // Count the size of the blob
                     .addSize(descriptor.size),
@@ -170,6 +183,9 @@ extension ImageStore {
             let tempFile = ingestDir.appendingPathComponent(id)
             let (_, digest) = try await client.fetchBlob(name: name, descriptor: descriptor, into: tempFile, progress: progress)
             guard digest.digestString == descriptor.digest else {
+                // Flagged #4: LOW: `fetchBlob()` leaks a temp file on digest mismatch
+                // When the downloaded blob's digest does not match the expected descriptor digest, the function throws a `ContainerizationError` without first removing the temporary file written to `ingestDir` under a UUID name. The file is never cleaned up, leaking disk space on every failed download.
+                try? fm.removeItem(at: tempFile)
                 throw ContainerizationError(.internalError, message: "digest mismatch expected \(descriptor.digest), got \(digest.digestString)")
             }
             do {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 5 total
 /*
  * Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
  *
@@ -84,10 +85,14 @@ static int cloexec_from(int min_fd) {
 
       int ret = mark_cloexec(fd);
       if (ret != 0) {
+        // Flagged #4: `cloexec_from` leaks the `DIR*` handle when `mark_cloexec` fails
+        // When `mark_cloexec` returns a non-zero value the function returns immediately without calling `closedir(dp)`, leaving the `DIR` stream and its underlying file descriptor open.
+        closedir(dp);
         return ret;
       }
     }
-    close(dp_fd);
+    // Flagged #3: `cloexec_from` double-closes `dp_fd`
+    // `close(dp_fd)` is called explicitly, immediately followed by `closedir(dp)`. `closedir` internally calls `close` on the same underlying file descriptor. The second close operates on an already-freed descriptor; if any other code (or a signal handler) opened a new file descriptor between the two closes, the second `close` silently closes that unrelated descriptor.
     closedir(dp);
     return 0;
 }
@@ -308,7 +313,9 @@ fail:
   err = errno;
   if (err) {
     // send our error to the parent
-    while (write(syncfd, &err, sizeof(err)) < 0)
+    // Flagged #1: `child_handler` error-reporting loop spins forever on `EPIPE`
+    // `while (write(syncfd, &err, sizeof(err)) < 0)` retries on every negative return value unconditionally. If the parent has already closed the read end of the sync pipe, `write` fails with `EPIPE` on every iteration and the loop never terminates.
+    while (write(syncfd, &err, sizeof(err)) < 0 && errno == EINTR)
       ;
   }
   exit(127);
@@ -322,20 +329,32 @@ int exec_command(pid_t *result, const char *executable, char *const args[],
   int err = 0;
   int sync_pipe[2];
   sigset_t old_mask;
+  // Flagged #2: `exec_command` restores uninitialized `old_mask` on early error paths
+  // `old_mask` is declared but never initialised before the `fail:` label is reached. If `pipe()` fails the function jumps directly to `fail:`, which calls `pthread_sigmask(SIG_SETMASK, &old_mask, 0)` with whatever garbage happens to be on the stack, permanently corrupting the calling thread's signal mask.
+  pthread_sigmask(SIG_SETMASK, NULL, &old_mask);
 
   sigset_t all;
   sigfillset(&all);
 
   if (pipe(sync_pipe)) {
+    // Flagged #5 (1 of 5): `exec_command` returns success on all parent-side failures
+    // Every parent-side error path in `exec_command` jumps to `fail:` without setting `err`. The `fail:` block gates its `-1` return on `if (err)`, so with `err == 0` it returns `0` (success) regardless of what failed.
+    err = errno;
     goto fail;
   }
 
   if (pthread_sigmask(SIG_SETMASK, &all, &old_mask) < 0) {
+    // Flagged #5 (2 of 5)
+    err = errno ? errno : EINVAL;
+    close(sync_pipe[0]);
+    close(sync_pipe[1]);
     goto fail;
   }
 
   pid = fork();
   if (pid == -1) {
+    // Flagged #5 (3 of 5)
+    err = errno;
     close(sync_pipe[0]);
     close(sync_pipe[1]);
     goto fail;
@@ -350,6 +369,9 @@ int exec_command(pid_t *result, const char *executable, char *const args[],
 
   // handle parent operations
   if (close(sync_pipe[1]) < 0) {
+    // Flagged #5 (4 of 5)
+    err = errno;
+    close(sync_pipe[0]);
     goto fail;
   }
 
@@ -371,6 +393,8 @@ int exec_command(pid_t *result, const char *executable, char *const args[],
   }
 
   if (close(sync_pipe[0]) < 0) {
+    // Flagged #5 (5 of 5)
+    if (!err) err = errno;
     goto fail;
   }
   if (err) {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 23:22 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -50,8 +51,10 @@ extension EXT4 {
             (blockCount - 1) / blocksPerGroup + 1
         }
 
+        // Flagged #1: HIGH: `groupDescriptorBlocks` returns 32× the correct block count
+        // `groupDescriptorBlocks` computed property — `((groupCount - 1) / groupsPerDescriptorBlock + 1) * 32`
         private var groupDescriptorBlocks: UInt32 {
-            ((groupCount - 1) / groupsPerDescriptorBlock + 1) * 32
+            (groupCount - 1) / groupsPerDescriptorBlock + 1
         }
 
         /// Initializes an ext4 filesystem formatter.
@@ -108,7 +111,13 @@ extension EXT4 {
             try self.handle.write(contentsOf: zero)
             // step #1
             self.inodes = [
-                Ptr<Inode>.allocate(capacity: 1),  // defective block inode
+                // Flagged #2: HIGH: Defective-block inode (inode 1) allocated but never initialized
+                // `init()`, first element of `self.inodes` array — `Ptr<Inode>.allocate(capacity: 1)` with no `.initialize(to:)`
+                {
+                    let p = Ptr<Inode>.allocate(capacity: 1)
+                    p.initialize(to: Inode())
+                    return p
+                }(),  // defective block inode
                 {
                     let root = Inode.Root()
                     let rootPtr = Ptr<Inode>.allocate(capacity: 1)
@@ -117,8 +126,12 @@ extension EXT4 {
                 }(),
             ]
             // reserved inodes
+            // Flagged #3: HIGH: Reserved inodes 3–10 allocated but never initialized
+            // `init()`, `for _ in 2..<EXT4.FirstInode - 1` loop — `inodes.append(Ptr<Inode>.allocate(capacity: 1))`
             for _ in 2..<EXT4.FirstInode - 1 {
-                inodes.append(Ptr<Inode>.allocate(capacity: 1))
+                let p = Ptr<Inode>.allocate(capacity: 1)
+                p.initialize(to: Inode())
+                inodes.append(p)
             }
             // step #2
             self.tree = FileTree(EXT4.RootInode, "/")
@@ -708,10 +721,15 @@ extension EXT4 {
                 if group == totalGroups - 1 && remainingBlocks != 0 && self.size / self.blockSize < self.blocksPerGroup {
                     for i in remainingBlocks..<self.blocksPerGroup {
                         bitmap[Int(i / 8)] |= 1 << (i % 8)
+                        // Flagged #4 (1 of 2): HIGH: `freeBlocksCount` massively overcounted for small filesystems
+                        // `close()`, remaining-blocks marking loops — neither `blocks += 1` nor `blocks -= 1` was present inside the loops
+                        blocks += 1
                     }
                     if remainingBlocks < self.size / self.blockSize {
                         for i in remainingBlocks..<self.size / self.blockSize {
                             bitmap[Int(i / 8)] &= ~(1 << (i % 8))
+                            // Flagged #4 (2 of 2)
+                            blocks -= 1
                         }
                     }
                 }
@@ -1152,7 +1170,9 @@ extension EXT4 {
         }
         // writes a single directory entry
         private func writeDirEntry(name: String, inode: InodeNumber, left: inout Int, link: InodeNumber? = nil) throws {
-            guard self.inodes[Int(inode) - 1].pointee.linksCount > 0 else {
+            // Flagged #5: HIGH: `writeDirEntry` guard checks placeholder inode instead of hardlink target
+            // `writeDirEntry()` — `guard self.inodes[Int(inode) - 1].pointee.linksCount > 0`
+            guard self.inodes[Int(link ?? inode) - 1].pointee.linksCount > 0 else {
                 return
             }
             guard let nameData = name.data(using: .utf8) else {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 21:52 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -31,6 +32,12 @@ public struct SystemPlatform: Sendable, Codable {
         case amd64
     }
     public let architecture: Architecture
+
+    // Flagged #1: MEDIUM: `WriteFileFlags` and `SystemPlatform` have no public initializer, making them unusable outside the module
+    public init(os: OS, architecture: Architecture) {
+        self.os = os
+        self.architecture = architecture
+    }
 
     public func ociPlatform() -> ContainerizationOCI.Platform {
         ContainerizationOCI.Platform(arch: architecture.rawValue, os: os.rawValue)

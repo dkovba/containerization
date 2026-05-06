@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 6 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -553,8 +554,9 @@ extension LinuxContainer {
             let vm = try await self.vmm.create(config: creationConfig)
             let relayManager = UnixSocketRelayManager(vm: vm, log: self.logger)
 
-            try await vm.start()
             do {
+                // Flagged #2 (1 of 2): HIGH: `LinuxPod.start()` and `LinuxContainer.start()` have multiple calls outside the cleanup `do` block, leaking VM and relay manager on failure
+                try await vm.start()
                 try await vm.withAgent { agent in
                     try await agent.standardSetup()
 
@@ -693,6 +695,8 @@ extension LinuxContainer {
                 state = .started(.init(createdState, process: process))
             } catch {
                 try? await agent.close()
+                // Flagged #2 (2 of 2)
+                try? await createdState.relayManager.stopAll()
                 try? await createdState.vm.stop()
                 state.setErrored(error: error)
                 throw error
@@ -712,7 +716,7 @@ extension LinuxContainer {
             let vm: any VirtualMachineInstance
             let relayManager: UnixSocketRelayManager
 
-            let startedState = try? state.startedState("stop")
+            let startedState: State.StartedState? = (try? state.startedState("stop")) ?? (try? state.pausedState("stop")).map { State.StartedState($0) }
             if let startedState {
                 vm = startedState.vm
                 relayManager = startedState.relayManager
@@ -742,8 +746,10 @@ extension LinuxContainer {
                                 message: "VirtualMachineAgent does not support relaySocket surface"
                             )
                         }
+                        // Flagged #3: HIGH: `LinuxContainer.stop()` aborts socket-relay cleanup loop on first `stopSocketRelay` error, leaving remaining relays active
+                        // Inside `stop()`, the loop that stops each Unix socket relay called `try await relayAgent.stopSocketRelay(configuration: socket)` with a bare `try`. If any relay-stop RPC threw (e.g. because the relay or agent had already been torn down), the loop exited immediately on the first failure, leaving all subsequent socket relays running.
                         for socket in sockets {
-                            try await relayAgent.stopSocketRelay(configuration: socket)
+                            try? await relayAgent.stopSocketRelay(configuration: socket)
                         }
                     }
 
@@ -808,6 +814,11 @@ extension LinuxContainer {
             } catch {
                 self.logger?.error("failed to stop VM: \(error)")
                 let finalError = firstError ?? error
+                // Flagged #4: HIGH: `LinuxContainer.stop()` sets state to `.errored` when VM stops successfully but a prior cleanup step failed
+                // `state = .stopped` and the subsequent `throw firstError` were placed inside the `do` block that called `try await vm.stop()`. When `vm.stop()` succeeded but `firstError` was non-nil (i.e. an earlier cleanup step such as deleting a vended process had failed), the code set `state = .stopped` and then threw `firstError` — which was immediately caught by the enclosing `catch` block. That catch called `state.setErrored(error: finalError)`, overwriting the just-set `.stopped` state with `.errored`, and rethrew. The caller received an error (correct) but the container's internal state was `.errored` rather than `.stopped` even though the VM had been cleanly shut down.
+                if case .stopped = state {
+                    throw finalError
+                }
                 state.setErrored(error: finalError)
                 throw finalError
             }
@@ -941,6 +952,12 @@ extension LinuxContainer {
     private func removeProcess(id: String) async {
         await self.state.withLock {
             guard case .started(var state) = $0 else {
+                // Flagged #7: MEDIUM: `LinuxContainer.removeProcess` silently no-ops on paused containers, accumulating stale vended-process entries
+                // `removeProcess(id:)` matched only `case .started`; all other states fell through to `default: break`. A paused container is in `.paused` state, so calling `removeProcess` while a container was paused left the entry for that process ID permanently in `vendedProcesses`.
+                if case .paused(var state) = $0 {
+                    state.vendedProcesses.removeValue(forKey: id)
+                    $0 = .paused(state)
+                }
                 return
             }
             state.vendedProcesses.removeValue(forKey: id)
@@ -1043,6 +1060,9 @@ extension LinuxContainer {
 
                 group.addTask {
                     guard let conn = await listener.first(where: { _ in true }) else {
+                        // Flagged #5 (1 of 2): HIGH: `LinuxContainer.copyIn` and `copyOut` leak the vsock listener when the connection or metadata stream yields no values
+                        // In the first task-group task inside `copyIn`, the `guard let conn = await listener.first(where: { _ in true }) else { throw … }` branch threw without calling `listener.finish()`. If the `VsockListener`'s stream terminates without yielding a connection (e.g., the Virtualization framework closes the vsock device while the task is waiting), the vsock port registration is never removed and the listener object is never released.
+                        try? listener.finish()
                         throw ContainerizationError(.internalError, message: "copyIn: vsock connection not established")
                     }
                     try listener.finish()
@@ -1132,6 +1152,9 @@ extension LinuxContainer {
 
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
+                    // Flagged #1: CRITICAL: `copyOut` deadlocks when agent task throws before yielding metadata
+                    // `metadataCont` was never finished if the agent task threw before calling `metadataCont.finish()`, causing the second task waiting on `metadataStream.first(where:)` to suspend forever, deadlocking the entire `withThrowingTaskGroup`.
+                    defer { metadataCont.finish() }
                     try await state.vm.withAgent { agent in
                         guard let vminitd = agent as? Vminitd else {
                             throw ContainerizationError(.unsupported, message: "copyOut requires Vminitd agent")
@@ -1150,6 +1173,8 @@ extension LinuxContainer {
 
                 group.addTask {
                     guard let metadata = await metadataStream.first(where: { _ in true }) else {
+                        // Flagged #5 (2 of 2)
+                        try? listener.finish()
                         throw ContainerizationError(.internalError, message: "copyOut: no metadata received")
                     }
 
@@ -1224,7 +1249,9 @@ extension VirtualMachineInstance {
         let agent = try await self.dialAgent()
         do {
             let result = try await fn(agent)
-            try await agent.close()
+            // Flagged #6: HIGH: `VirtualMachineInstance.withAgent` discards successful result and double-closes the agent when `agent.close()` throws
+            // On the success path, `withAgent` called `try await agent.close()` after `fn(agent)` returned a result. If `agent.close()` threw, the error propagated out of the `do` block — discarding the already-computed `result` — and fell into the `catch` handler, which then called `try? agent.close()` a second time before rethrowing. Two defects resulted: (1) the successful return value of `fn` was lost and the caller received a spurious close error instead; (2) the agent connection was closed twice, potentially corrupting the underlying gRPC channel state.
+            try? await agent.close()
             return result
         } catch {
             try? await agent.close()

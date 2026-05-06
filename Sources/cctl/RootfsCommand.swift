@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 5 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -66,12 +67,19 @@ extension Application {
                 "sbin",
                 "dev",
                 "sys",
+                // Flagged #1: MEDIUM: `proc` parent directory missing from rootfs directory list
+                // The static `directories` array contains `"proc/self"` but not `"proc"`. Archive entries for `proc/self` are written without first creating the `proc` parent directory entry.
+                "proc",
                 "proc/self",  // hack for swift init's booting
                 "run",
                 "tmp",
                 "mnt",
                 "var",
             ]
+
+            // Flagged #2 (1 of 2): MEDIUM: Reserved sbin filename not checked before adding OCI runtime binary
+            // When `--oci-runtime` is specified, the binary is placed at `sbin/<filename>` with no check that the filename conflicts with reserved entries such as `vminitd` or `vmexec`.
+            private static let reservedSbinNames: Set<String> = ["vminitd", "vmexec"]
 
             func run() async throws {
                 let path = URL(filePath: self.tarPath)
@@ -136,20 +144,27 @@ extension Application {
                 entry.fileType = .regular
                 entry.path = "sbin/vminitd"
 
-                var src = URL(fileURLWithPath: vminitd)
+                // Flagged #3 (1 of 4): MEDIUM: `~` not expanded in path arguments
+                var src = URL(fileURLWithPath: (vminitd as NSString).expandingTildeInPath)
                 var data = try Data(contentsOf: src)
                 entry.size = Int64(data.count)
                 try writer.writeEntry(entry: entry, data: data)
 
-                src = URL(fileURLWithPath: vmexec)
+                // Flagged #3 (2 of 4)
+                src = URL(fileURLWithPath: (vmexec as NSString).expandingTildeInPath)
                 data = try Data(contentsOf: src)
                 entry.path = "sbin/vmexec"
                 entry.size = Int64(data.count)
                 try writer.writeEntry(entry: entry, data: data)
 
                 if let ociRuntimePath = self.ociRuntime {
-                    src = URL(fileURLWithPath: ociRuntimePath)
+                    // Flagged #3 (3 of 4)
+                    src = URL(fileURLWithPath: (ociRuntimePath as NSString).expandingTildeInPath)
                     let fileName = src.lastPathComponent
+                    // Flagged #2 (2 of 2)
+                    guard !Self.reservedSbinNames.contains(fileName) else {
+                        throw ContainerizationError(.invalidArgument, message: "OCI runtime filename '\(fileName)' conflicts with a reserved sbin entry")
+                    }
                     data = try Data(contentsOf: src)
                     entry.path = "sbin/\(fileName)"
                     entry.size = Int64(data.count)
@@ -157,20 +172,28 @@ extension Application {
                 }
 
                 for addFile in addFiles {
-                    let paths = addFile.components(separatedBy: ":")
-                    guard paths.count == 2 else {
+                    // Flagged #4: MEDIUM: `--add-file` `src:dst` parsing splits on every `:` — source paths with colons fail
+                    // `addFile.components(separatedBy: ":")` splits on all colons. A source path containing `:` (e.g. an absolute path on a volume with a colon in its name) yields more than two components, and the `guard paths.count == 2` check rejects it.
+                    guard let colonIndex = addFile.firstIndex(of: ":") else {
                         throw ContainerizationError(.invalidArgument, message: "use src-path:dst-path for --add-file")
                     }
-                    src = URL(fileURLWithPath: paths[0])
+                    // Flagged #3 (4 of 4)
+                    let srcPath = (String(addFile[addFile.startIndex..<colonIndex]) as NSString).expandingTildeInPath
+                    // Flagged #5: MEDIUM: `--add-file` destination path written with leading `/` into the archive
+                    // If the user specifies a destination path beginning with `/` (e.g. `/etc/hosts`), the raw path including the leading slash is used as the archive entry path. Many archive formats and the kernel treat such paths as absolute and may reject or mishandle them.
+                    let dstPath = String(addFile[addFile.index(after: colonIndex)...]).drop(while: { $0 == "/" })
+                    src = URL(fileURLWithPath: srcPath)
                     data = try Data(contentsOf: src)
-                    entry.path = paths[1]
+                    entry.path = String(dstPath)
                     entry.size = Int64(data.count)
                     try writer.writeEntry(entry: entry, data: data)
                 }
 
                 entry.fileType = .symbolicLink
                 entry.path = "proc/self/exe"
-                entry.symlinkTarget = "sbin/vminitd"
+                // Flagged #6: MEDIUM: `proc/self/exe` symlink target is a relative path
+                // `entry.symlinkTarget = "sbin/vminitd"` writes a relative symlink. The kernel resolves it relative to the symlink's own directory (`proc/self/`), so it expands to `proc/self/sbin/vminitd`, which does not exist.
+                entry.symlinkTarget = "/sbin/vminitd"
                 entry.size = nil
                 try writer.writeEntry(entry: entry, data: nil)
                 try writer.finishEncoding()

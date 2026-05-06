@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -19,11 +20,19 @@ import Foundation
 
 extension Terminal: ReaderStream {
     public func stream() -> AsyncStream<Data> {
-        .init { cont in
-            self.handle.readabilityHandler = { handle in
-                let data = handle.availableData
+        // Flagged #1: HIGH: `Terminal.stream()` captures `self` in `readabilityHandler`, creating a retain cycle and handler leak on cancellation
+        // The `readabilityHandler` closure captured `self` (the `Terminal`), creating a strong retain cycle: `Terminal` → `readabilityHandler` → `Terminal`. Additionally, there was no `onTermination` handler on the `AsyncStream` continuation, so if the stream consumer cancelled before EOF the `readabilityHandler` was never cleared.
+        .init { [handle = self.handle] cont in
+            // Flagged #2: MEDIUM: `Terminal.stream()` leaks `readabilityHandler` on cancellation
+            // The `AsyncStream` returned by `stream()` never cleans up the `readabilityHandler`
+            //   when the consuming Task is cancelled. The `readabilityHandler` closure continues to
+            //   fire indefinitely, with `cont.yield()` calls silently dropped on the finished
+            //   continuation, and the handler is never set to `nil`.
+            cont.onTermination = { _ in handle.readabilityHandler = nil }
+            handle.readabilityHandler = { fh in
+                let data = fh.availableData
                 if data.isEmpty {
-                    self.handle.readabilityHandler = nil
+                    handle.readabilityHandler = nil
                     cont.finish()
                     return
                 }

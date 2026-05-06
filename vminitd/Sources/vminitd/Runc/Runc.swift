@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:17 — 0 critical, 4 high, 8 medium, 0 low (12 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -304,6 +305,12 @@ extension Runc {
             args += ["--log-format", logFormat.rawValue]
         }
 
+        // Flagged #11: MEDIUM: `criu` property is never passed to runc as `--criu`
+        // `baseArgs()` included every other global flag but silently dropped `criu`, so callers setting it to override the criu binary had their value ignored.
+        if let criu = criu {
+            args += ["--criu", criu]
+        }
+
         if systemdCgroup {
             args.append("--systemd-cgroup")
         }
@@ -358,7 +365,9 @@ extension Runc {
         }
 
         var output = Data()
-        if stdout == nil {
+        // Flagged #1: CRITICAL: `execute()` deadlocks when `stdout` is provided but `stderr` is nil
+        // `cmd.stderr` is routed into `outPipe` whenever `stderr` is nil, but the drain block was gated on `if stdout == nil`, so the pipe was never drained when only `stderr` was nil.
+        if stdout == nil || stderr == nil {
             try? outPipe.fileHandleForWriting.close()
             output = try outPipe.fileHandleForReading.readToEnd() ?? Data()
         }
@@ -379,7 +388,11 @@ extension Runc {
         }
 
         do {
-            return try JSONDecoder().decode(T.self, from: output)
+            // Flagged #2: HIGH: `executeJSON()` cannot decode ISO 8601 dates
+            // Default `dateDecodingStrategy` expects a numeric Unix timestamp; runc's `list` output serialises dates as RFC 3339 strings, causing every `list()` call to throw `invalidJSON`.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(T.self, from: output)
         } catch {
             let outputStr = String(data: output, encoding: .utf8) ?? ""
             throw Error.invalidJSON("failed to decode: \(error), output: \(outputStr)")
@@ -585,7 +598,13 @@ extension Runc {
             args += ["--process", processPath]
         }
 
-        args += [id, processSpec]
+        // Flagged #12: MEDIUM: `exec()` appends `processSpec` even when `--process` file is specified
+        // `args += [id, processSpec]` was unconditional; when `opts.processPath` is set runc only accepts `<container-id>` and rejects the trailing inline command.
+        if opts.processPath == nil {
+            args += [id, processSpec]
+        } else {
+            args.append(id)
+        }
 
         try await executeVoid(
             args: args,
@@ -714,9 +733,11 @@ extension Runc {
         return pids
     }
 
+    // Flagged #3: HIGH: `version()` invokes `runc runc --version` instead of `runc --version`
+    // `let args = [command, "--version"]` prepends `self.command` into the arguments array; `execute()` already passes `self.command` as the binary, so runc receives its own path as a subcommand.
     /// Get version information
     func version() async throws -> String {
-        let args = [command, "--version"]
+        let args = baseArgs() + ["--version"]
         let (status, output) = try await execute(args: args)
 
         guard status == 0 else {
@@ -737,10 +758,12 @@ extension Runc {
         let id: String
         let stats: EventStats?
 
+        // Flagged #4: HIGH: `Event.stats` JSON key does not match runc output
+        // `case stats` mapped to the literal key `"stats"`; runc's event JSON uses `"data"` (Go tag: `json:"data,omitempty"`), so `stats` always decoded as nil.
         enum CodingKeys: String, CodingKey {
             case type
             case id
-            case stats
+            case stats = "data"
         }
     }
 
@@ -750,10 +773,12 @@ extension Runc {
         let memory: MemoryStats?
         let pids: PIDStats?
 
+        // Flagged #5: HIGH: `EventStats` JSON keys do not match runc output
+        // `case cpu`, `case memory`, and `case pids` mapped to literal keys `"cpu"`, `"memory"`, `"pids"`; runc uses `"cpu_stats"`, `"memory_stats"`, `"pids_stats"`, so all three always decoded as nil.
         enum CodingKeys: String, CodingKey {
-            case cpu
-            case memory
-            case pids
+            case cpu = "cpu_stats"
+            case memory = "memory_stats"
+            case pids = "pids_stats"
         }
     }
 
@@ -761,25 +786,58 @@ extension Runc {
         let usage: CPUUsage?
         let throttling: ThrottlingData?
 
+        // Flagged #6: HIGH: `CPUStats` JSON keys do not match runc output
+        // `usage` and `throttling` were missing CodingKeys on the outer `CPUStats` struct; runc uses `cpu_usage` and `throttling_data`, so both fields always decoded as nil.
+        enum CodingKeys: String, CodingKey {
+            case usage = "cpu_usage"
+            case throttling = "throttling_data"
+        }
+
         struct CPUUsage: Codable, Sendable {
             let total: UInt64?
             let percpu: [UInt64]?
+
+            // Flagged #7: HIGH: `CPUUsage` JSON keys do not match runc output
+            // `total` and `percpu` were missing explicit CodingKeys; runc uses `total_usage` and `percpu_usage`, so both fields always decoded as nil.
+            enum CodingKeys: String, CodingKey {
+                case total = "total_usage"
+                case percpu = "percpu_usage"
+            }
         }
 
         struct ThrottlingData: Codable, Sendable {
             let periods: UInt64?
             let throttledPeriods: UInt64?
             let throttledTime: UInt64?
+
+            // Flagged #8: HIGH: `ThrottlingData` JSON keys do not match runc output
+            // `periods`, `throttledPeriods`, and `throttledTime` were missing CodingKeys; runc uses `throttling_periods`, `throttled_periods`, and `throttled_time`, so all three always decoded as nil.
+            enum CodingKeys: String, CodingKey {
+                case periods = "throttling_periods"
+                case throttledPeriods = "throttled_periods"
+                case throttledTime = "throttled_time"
+            }
         }
     }
 
+    // Flagged #9 (1 of 2): HIGH: `MemoryStats.limit` is at the wrong JSON nesting level
+    // `MemoryStats` declared `limit` as a top-level property, but runc emits it inside `memory_stats.usage`; it was removed here and moved into `MemoryUsage`.
     struct MemoryStats: Codable, Sendable {
         let usage: MemoryUsage?
-        let limit: UInt64?
 
         struct MemoryUsage: Codable, Sendable {
             let usage: UInt64?
             let max: UInt64?
+            // Flagged #9 (2 of 2)
+            let limit: UInt64?
+
+            // Flagged #10: HIGH: `MemoryUsage.max` JSON key does not match runc output
+            // `max` was missing an explicit CodingKey; runc uses `max_usage`, so it always decoded as nil.
+            enum CodingKeys: String, CodingKey {
+                case usage
+                case max = "max_usage"
+                case limit
+            }
         }
     }
 

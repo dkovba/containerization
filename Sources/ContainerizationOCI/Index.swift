@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -24,9 +25,9 @@ public struct Index: Codable, Sendable {
     /// schemaVersion is the image manifest schema that this image follows
     public let schemaVersion: Int
 
-    /// mediaType specifies the type of this document data structure e.g. `application/vnd.oci.image.index.v1+json`
-    /// This field is optional per the OCI Image Index Specification (omitempty)
-    public let mediaType: String
+    // Flagged #1 (1 of 3): MEDIUM: `Index.mediaType` always encoded even when absent, breaking OCI round-trips
+    // `mediaType` was declared as non-optional `String`. The custom decoder used `decodeIfPresent` and fell back to `""` when the field was absent in the JSON. Because no custom `encode(to:)` was provided, the synthesized encoder always emitted `"mediaType": ""` — even for an index decoded from JSON that contained no `mediaType` field. This violates the OCI Image Index Specification, which marks `mediaType` as `omitempty`, and corrupts round-trip JSON encoding.
+    public let mediaType: String?
 
     /// manifests references platform specific manifests.
     public var manifests: [Descriptor]
@@ -40,8 +41,9 @@ public struct Index: Codable, Sendable {
     /// `artifactType` specifies the IANA media type of the artifact this index represents.
     public let artifactType: String?
 
+    // Flagged #1 (2 of 3)
     public init(
-        schemaVersion: Int = 2, mediaType: String = MediaTypes.index, manifests: [Descriptor],
+        schemaVersion: Int = 2, mediaType: String? = MediaTypes.index, manifests: [Descriptor],
         annotations: [String: String]? = nil, subject: Descriptor? = nil, artifactType: String? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -55,7 +57,8 @@ public struct Index: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        self.mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType) ?? ""
+        // Flagged #1 (3 of 3)
+        self.mediaType = try container.decodeIfPresent(String.self, forKey: .mediaType)
         self.manifests = try container.decode([Descriptor].self, forKey: .manifests)
         self.annotations = try container.decodeIfPresent([String: String].self, forKey: .annotations)
         self.subject = try container.decodeIfPresent(Descriptor.self, forKey: .subject)

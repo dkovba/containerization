@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 13:19 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -204,7 +205,14 @@ extension VsockProxy {
                     )
                 }
 
-                try relayTo.connect()
+                // Flagged #1: MEDIUM: `relayTo` socket fd leaked when `connect()` fails
+                // Inside `handleConn`, the outbound socket `relayTo` was created with `closeOnDeinit: false` and assigned from an uninitialized (non-optional) variable. If `relayTo.connect()` threw an error, the outer `catch` block called `c.resume(throwing: error)` without closing `relayTo`. Because `closeOnDeinit: false` suppresses the automatic close in `deinit`, the underlying file descriptor was silently leaked on every failed outbound connection attempt.
+                do {
+                    try relayTo.connect()
+                } catch {
+                    try? relayTo.close()
+                    throw error
+                }
 
                 // `clientFile` isn't used concurrently.
                 nonisolated(unsafe) var clientFile = OSFile.SpliceFile(fd: conn.fileDescriptor)

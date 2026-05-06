@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -258,7 +259,15 @@ extension Command {
     private func createFileset() throws -> (nullHandles: [FileHandle], handles: [FileHandle]) {
         // grab dev null handles for different purposes
         let nullRead = try openDevNull(flags: O_RDONLY)
-        let nullWrite = try openDevNull(flags: O_WRONLY)
+        // Flagged #1: MEDIUM: `createFileset()` leaks `nullRead` file descriptor when `openDevNull(O_WRONLY)` throws
+        // `nullRead` is opened first, then `nullWrite = try openDevNull(flags: O_WRONLY)`. If the second `openDevNull` call throws, the function returns an error and the `nullRead` `FileHandle` is discarded. Because it was created with `closeOnDealloc: false`, ARC deallocation does not close the underlying file descriptor, causing a leak. The cleanup `defer` in the caller (`execute()`) is only registered after `createFileset()` returns successfully, so it never runs on the error path.
+        let nullWrite: FileHandle
+        do {
+            nullWrite = try openDevNull(flags: O_WRONLY)
+        } catch {
+            try? nullRead.close()
+            throw error
+        }
         var files = [FileHandle]()
         files.append(stdin ?? nullRead)
         files.append(stdout ?? nullWrite)
@@ -307,7 +316,9 @@ extension Command {
         if signaled(ws) {
             // We use the offset as that is how existing container
             // runtimes minic bash for the status when signaled.
-            return Int32(Self.signalOffset + ws & mask)
+            // Flagged #2: MEDIUM: `toExitStatus(_:)` discards signal offset, returning bare signal number
+            // `Int32(Self.signalOffset + ws & mask)` is evaluated as `Int32((Self.signalOffset + ws) & mask)` because in Swift `+` (`AdditionPrecedence`) and `&` (`BitwiseAndPrecedence`) belong to incomparable precedence groups, and without explicit parentheses the expression is parsed left-to-right. `signalOffset` is `128` (`0x80`) and `mask` is `0x7F`, so `(128 + ws) & 0x7F` strips the high bit and always returns a value in `[0, 127]` — identical to the raw signal number. The `signalOffset` constant has no effect.
+            return Self.signalOffset + (ws & mask)
         }
         if exited(ws) {
             return exitStatus(ws)

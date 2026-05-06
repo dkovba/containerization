@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 23:34 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -119,7 +120,10 @@ extension EXT4 {
 
         private func readGroupDescriptor(_ number: UInt32) throws -> GroupDescriptor {
             let bs = self.blockSize
-            let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)
+            // Flagged #1: CRITICAL: `readGroupDescriptor()` reads from wrong disk offset on 1 KB block filesystems
+            // `let offset = bs + UInt64(number) * UInt64(self.groupDescriptorSize)` uses `bs` (the block size in bytes) as the byte offset of the Group Descriptor Table for all block sizes. For filesystems with 1 KB blocks (`logBlockSize == 0`, `bs = 1024`), the superblock occupies block 1 (bytes 1024–2047), so the GDT starts at block 2 (byte offset 2048 = `bs * 2`). Using `bs` (1024) as the GDT base points into the superblock region, causing every group descriptor read to return corrupt data. For all block sizes larger than 1 KB the GDT is correctly at block 1 (`bs` bytes from the start).
+            let gdtStart = _superBlock.logBlockSize == 0 ? bs * 2 : bs
+            let offset = gdtStart + UInt64(number) * UInt64(self.groupDescriptorSize)
             try self.handle.seek(toOffset: offset)
             guard let data = try? self.handle.read(upToCount: MemoryLayout<EXT4.GroupDescriptor>.size) else {
                 throw EXT4.Error.couldNotReadGroup(number)

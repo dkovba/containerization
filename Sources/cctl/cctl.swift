@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 4 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -30,23 +31,37 @@ let log = {
 @main
 struct Application: AsyncParsableCommand {
     static let keychainID = "com.apple.containerization"
+    // Flagged #1 (1 of 3): HIGH: `try!`/force-unwrap in store and app-root initialization crashes with no diagnostic
+    // `appRoot` uses `.first!`, `_contentStore` uses `try!`, and `_imageStore` uses `try!`. Any failure (permissions error, missing directory, corrupt store) terminates the process with an uncaught exception and no user-readable message.
     static let appRoot: URL = {
-        FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first!
-        .appendingPathComponent("com.apple.containerization")
+        guard let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            fputs("fatal: cannot locate application support directory\n", stderr)
+            Darwin.exit(1)
+        }
+        return url.appendingPathComponent("com.apple.containerization")
     }()
 
+    // Flagged #1 (2 of 3)
     private static let _contentStore: ContentStore = {
-        try! LocalContentStore(path: appRoot.appendingPathComponent("content"))
+        do {
+            return try LocalContentStore(path: appRoot.appendingPathComponent("content"))
+        } catch {
+            fputs("fatal: cannot initialize content store: \(error)\n", stderr)
+            Darwin.exit(1)
+        }
     }()
 
+    // Flagged #1 (3 of 3)
     private static let _imageStore: ImageStore = {
-        try! ImageStore(
-            path: appRoot,
-            contentStore: contentStore
-        )
+        do {
+            return try ImageStore(
+                path: appRoot,
+                contentStore: contentStore
+            )
+        } catch {
+            fputs("fatal: cannot initialize image store: \(error)\n", stderr)
+            Darwin.exit(1)
+        }
     }()
 
     static var imageStore: ImageStore {
@@ -68,6 +83,9 @@ struct Application: AsyncParsableCommand {
             #if os(macOS)
             commands += [
                 Images.self,
+                // Flagged #2: HIGH: `KernelCommand.self` missing from the top-level subcommands list
+                // `KernelCommand.self` is not added to the `subcommands` array in `Application`'s `CommandConfiguration`. The struct exists but is never registered.
+                KernelCommand.self,
                 Login.self,
                 Run.self,
             ]
@@ -79,10 +97,11 @@ struct Application: AsyncParsableCommand {
 
 extension String {
     var absoluteURL: URL {
-        URL(fileURLWithPath: self).absoluteURL
+        // Flagged #4: MEDIUM: `String.absoluteURL` resolves relative paths from the wrong base
+        // `URL(fileURLWithPath: self).absoluteURL` resolves a relative path against the process's initial working directory as recorded by the OS, not `FileManager.default.currentDirectoryPath`. These can diverge if the process changes directory. The correct form is `URL(fileURLWithPath: self, relativeTo: .currentDirectory()).absoluteURL`.
+        URL(fileURLWithPath: self, relativeTo: .currentDirectory()).absoluteURL
     }
 }
 
-extension String: Swift.Error {
-
-}
+// Flagged #3: HIGH: `extension String: Swift.Error` allows any string to be thrown as an error
+// Conforming `String` to `Swift.Error` lets any string literal be thrown with `throw "message"`. This bypasses typed error handling, prevents the compiler from checking exhaustiveness, and produces poor diagnostic output.

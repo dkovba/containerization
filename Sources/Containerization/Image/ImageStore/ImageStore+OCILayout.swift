@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 15:30 — 0 critical, 0 high, 0 medium, 1 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -42,8 +43,10 @@ extension ImageStore {
         for reference in references {
             let image = try await self.get(reference: reference)
             let allowedMediaTypes = [MediaTypes.dockerManifestList, MediaTypes.index]
+            // Flagged #1: LOW: `save()` error message is inverted, misleading callers about why the save was rejected
+            // The `guard allowedMediaTypes.contains(image.mediaType)` branch fires when the image media type is *not* an index type (`dockerManifestList` or `index`). The original error message read `"cannot save image … with Index media type …"`, implying the image had an index media type — the exact opposite of the truth. Callers would conclude that index-type images are disallowed, when in fact only index-type images are allowed.
             guard allowedMediaTypes.contains(image.mediaType) else {
-                throw ContainerizationError(.internalError, message: "cannot save image \(image.reference) with Index media type \(image.mediaType)")
+                throw ContainerizationError(.internalError, message: "cannot save image \(image.reference): unsupported media type \(image.mediaType); expected an image index")
             }
             toSave.append(image)
         }

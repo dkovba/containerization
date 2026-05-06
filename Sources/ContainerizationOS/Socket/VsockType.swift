@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 20:54 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -71,6 +72,11 @@ public struct VsockType: SocketType, Sendable {
         sockaddr.svm_family = sa_family_t(AF_VSOCK)
         sockaddr.svm_cid = cid
         sockaddr.svm_port = port
+        // Flagged #1: CRITICAL: `init(port:cid:)` leaves `svm_len` zero on macOS, causing `bind`/`connect` to fail
+        // `init(port:cid:)` zero-initialises `sockaddr_vm` and sets `svm_family`, `svm_cid`, and `svm_port`, but never sets `svm_len`. The field is therefore left at 0 instead of `sizeof(struct sockaddr_vm)` (16). The analogous `UnixType.init` correctly sets `sun_len` on macOS; `VsockType` was inconsistently omitting the equivalent initialisation.
+        #if os(macOS)
+        sockaddr.svm_len = UInt8(MemoryLayout<sockaddr_vm>.size)
+        #endif
         self._addr = sockaddr
     }
 

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -148,7 +149,9 @@ public enum Format: String, Sendable {
         case .paxRestricted: return ARCHIVE_FORMAT_TAR_PAX_RESTRICTED
         case .gnutar: return ARCHIVE_FORMAT_TAR_GNUTAR
         case .cpio: return ARCHIVE_FORMAT_CPIO_POSIX
-        case .cpioNewc: return ARCHIVE_FORMAT_CPIO_AFIO_LARGE
+        // Flagged #1: CRITICAL: `Format.cpioNewc` maps to the wrong libarchive format constant
+        // `case .cpioNewc` returned `ARCHIVE_FORMAT_CPIO_AFIO_LARGE` instead of `ARCHIVE_FORMAT_CPIO_SVR4_NOCRC`. AFIO is an unrelated extended-cpio variant; the SVR4 "newc" format (magic `070701`, no checksum) is `ARCHIVE_FORMAT_CPIO_SVR4_NOCRC`.
+        case .cpioNewc: return ARCHIVE_FORMAT_CPIO_SVR4_NOCRC
         case .zip: return ARCHIVE_FORMAT_ZIP
         case .shar: return ARCHIVE_FORMAT_SHAR_BASE
         case .sharDump: return ARCHIVE_FORMAT_SHAR_DUMP

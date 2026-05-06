@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -16,7 +17,9 @@
 
 /// Protocol to conform to if your agent is capable of relaying unix domain socket
 /// connections.
-public protocol SocketRelayAgent {
+// Flagged #1: MEDIUM: SocketRelayAgent protocol missing Sendable conformance
+// SocketRelayAgent was declared as a plain public protocol without : Sendable. Conforming types are used as existentials across actor and task boundaries; without Sendable the compiler cannot verify that conforming values are safe to pass between concurrency domains, producing either a warning (Swift 5 mode) or an error (Swift 6 strict concurrency).
+public protocol SocketRelayAgent: Sendable {
     func relaySocket(port: UInt32, configuration: UnixSocketConfiguration) async throws
     func stopSocketRelay(configuration: UnixSocketConfiguration) async throws
 }

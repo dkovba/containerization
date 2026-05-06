@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 16:48 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -198,8 +199,10 @@ extension RegistryClient {
             do {
                 try await handle.close()
             } catch {
+                // Flagged #1: CRITICAL: `fetchBlob(into:progress:)` masks original error when `detachUnsafeFileDescriptor()` throws
+                // `_ = try handle.detachUnsafeFileDescriptor()` throws here, it propagates out of the inner `catch`, bypasses `throw error`, and discards the original fetch error.
                 // Use `detachUnsafeFileDescriptor()` as suggested by the error message to prevent a leak detection crash when `close()` fails.
-                _ = try handle.detachUnsafeFileDescriptor()
+                _ = try? handle.detachUnsafeFileDescriptor()
             }
             throw error
         }

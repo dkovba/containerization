@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -21,11 +22,16 @@ import Foundation
 
 extension Application {
     static func fetchImage(reference: String, store: ImageStore) async throws -> Containerization.Image {
+        // Flagged #1: MEDIUM: fetchImage does not normalize the reference before store lookups
+        // The raw `reference` string is passed directly to `store.get` and `store.pull` without parsing and normalizing. A reference like `ubuntu` is stored normalized (e.g. `docker.io/library/ubuntu:latest`) but looked up unnormalized, producing a not-found error and triggering an unnecessary pull.
+        let ref = try Reference.parse(reference)
+        ref.normalize()
+        let normalizedReference = ref.description
         do {
-            return try await store.get(reference: reference)
+            return try await store.get(reference: normalizedReference)
         } catch let error as ContainerizationError {
             if error.code == .notFound {
-                return try await store.pull(reference: reference)
+                return try await store.pull(reference: normalizedReference)
             }
             throw error
         }
@@ -34,11 +40,17 @@ extension Application {
     static func parseKeyValuePairs(from items: [String]) -> [String: String] {
         var parsedLabels: [String: String] = [:]
         for item in items {
-            let parts = item.split(separator: "=", maxSplits: 1)
+            // Flagged #2 (1 of 2): MEDIUM: `parseKeyValuePairs` silently drops `key=` label entries with empty values
+            // `item.split(separator: "=", maxSplits: 1)` with default `omittingEmptySubsequences: true` drops trailing empty substrings, so `"key="` produces `["key"]` (count 1), which fails the `guard parts.count == 2` check and is silently ignored.
+            let parts = item.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else {
                 continue
             }
             let key = String(parts[0])
+            // Flagged #2 (2 of 2)
+            guard !key.isEmpty else {
+                continue
+            }
             let val = String(parts[1])
             parsedLabels[key] = val
         }

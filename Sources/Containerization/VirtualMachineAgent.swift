@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -23,6 +24,10 @@ public struct WriteFileFlags {
     public var createParentDirectories = false
     public var append = false
     public var create = false
+
+    // Flagged #1: MEDIUM: `WriteFileFlags` and `SystemPlatform` have no public initializer, making them unusable outside the module
+    // Both `WriteFileFlags` and `SystemPlatform` are `public struct`s but rely on the compiler-synthesised memberwise initializer, which is `internal`. External callers cannot construct instances of either type directly. For `WriteFileFlags`, this makes the `writeFile` API unusable from outside `Containerization`. For `SystemPlatform`, external callers are limited to the two pre-built static factory properties (`.linuxArm`, `.linuxAmd`) and cannot construct any other `os`/`architecture` combination.
+    public init() {}
 }
 
 /// A protocol for the agent running inside a virtual machine. If an operation isn't

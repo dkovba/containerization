@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:46 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -36,10 +37,12 @@ public struct IPv4Address: Sendable, Hashable, CustomStringConvertible, Equatabl
         guard bytes.count == 4 else {
             throw AddressError.unableToParse
         }
+        // Flagged #1: CRITICAL: `init(_ bytes:)` applies wrong shift to third octet
+        // `(UInt32(bytes[2]) << 16)` uses a left-shift of 16 bits — identical to the shift applied to `bytes[1]` on the preceding line. In network byte order, `bytes[2]` is the third octet and must occupy bit positions 15–8, so it must be shifted by 8, not 16. The duplicate `<< 16` causes `bytes[2]` to overwrite the bits already contributed by `bytes[1]`, and leaves the third-byte position of the result permanently zero.
         self.value =
             (UInt32(bytes[0]) << 24)
             | (UInt32(bytes[1]) << 16)
-            | (UInt32(bytes[2]) << 16)
+            | (UInt32(bytes[2]) << 8)
             | UInt32(bytes[3])
     }
 

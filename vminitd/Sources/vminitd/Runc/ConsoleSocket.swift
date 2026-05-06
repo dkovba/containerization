@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -72,7 +73,11 @@ public final class ConsoleSocket: Sendable {
     /// Close the socket and optionally remove the socket file
     public func close() throws {
         try socket.close()
+        // Flagged #1: MEDIUM: `close()` leaks the parent directory of temporary sockets
+        // `close()` removed the socket file via `removeItem(atPath: socketPath)` but never removed the parent directory. Every socket created through `temporary()` allocates a unique directory under `/tmp/runc-console-<UUID>/`; without cleaning up that directory, each `close()` or `deinit` permanently leaves an empty directory behind in `/tmp`.
+        let parentDir = URL(fileURLWithPath: socketPath).deletingLastPathComponent().path
         try FileManager.default.removeItem(atPath: socketPath)
+        try? FileManager.default.removeItem(atPath: parentDir)
     }
 
     deinit {

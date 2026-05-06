@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -89,6 +90,9 @@ extension FileDescriptor {
         // Open the directory stream using a duplicate fd that closedir() will close.
         let ownedFd = os_dup(componentFd)
         guard let dir = fdopendir(ownedFd) else {
+            // Flagged #1: MEDIUM: `unlinkRecursiveSecure` leaks `ownedFd` when `fdopendir` fails
+            // `os_dup` is called to produce `ownedFd` for use with `fdopendir`. On success, `closedir` owns that fd and will close it. On failure, however, `fdopendir` does not close the fd it was given. The original code threw immediately on `fdopendir` failure without closing `ownedFd`, so every call that successfully duplicated the fd but failed to open the directory stream leaked a file descriptor.
+            if ownedFd >= 0 { close(ownedFd) }
             throw SecurePathError.systemError("directory opendir during secure unlink", errno)
         }
         defer { closedir(dir) }

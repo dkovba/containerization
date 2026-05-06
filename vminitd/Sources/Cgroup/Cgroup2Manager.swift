@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 10:26 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -218,7 +219,10 @@ package struct Cgroup2Manager: Sendable {
 
         if let cpu = resources.cpu, let quota = cpu.quota, let period = cpu.period {
             // cpu.max format is "quota period"
-            let value = "\(quota) \(period)"
+            // Flagged #1: HIGH: `applyResources()` writes invalid cpu quota for unlimited (-1) setting
+            // When `cpu.quota` is `-1` (unlimited), the kernel expects "max", not "-1", in `cpu.max`
+            let quotaValue = quota < 0 ? "max" : String(quota)
+            let value = "\(quotaValue) \(period)"
             try Self.writeValue(
                 path: self.path,
                 value: value,

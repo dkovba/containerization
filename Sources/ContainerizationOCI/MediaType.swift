@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -14,9 +15,9 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-/// MediaTypes represent all supported OCI image content types for both metadata and layer formats.
-/// Follows all distributable media types in: https://github.com/opencontainers/image-spec/blob/main/specs-go/v1/mediatype.go
-public struct MediaTypes: Codable, Sendable {
+// Flagged #1: LOW: `MediaTypes` declares spurious `Codable` conformance
+// `MediaTypes` is declared as `public struct MediaTypes: Codable, Sendable` despite having no stored instance properties. The struct is a pure static-constants namespace; the `Codable` conformance is semantically incorrect — it implies that `MediaTypes` instances are serializable data objects, when in fact no such instances are ever meant to exist. Swift synthesizes a trivial no-op `encode(to:)` / `init(from:)` pair that silently encodes any instance as `{}`, misrepresenting the type to callers and type-inference.
+public struct MediaTypes: Sendable {
     /// Specifies the media type for a content descriptor.
     public static let descriptor = "application/vnd.oci.descriptor.v1+json"
 

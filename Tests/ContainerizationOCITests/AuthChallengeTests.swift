@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 12:37 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -52,7 +53,9 @@ struct AuthChallengeTests {
     @Test(arguments: testCases)
     func parseAuthHeader(testCase: TestCase) throws {
         let challenges = RegistryClient.parseWWWAuthenticateHeaders(headers: [testCase.input])
-        #expect(challenges.count == 1)
+        // Flagged #1: HIGH: `parseAuthHeader` crashes on unexpected parse result
+        // `#expect(challenges.count == 1)` records a test failure but does not stop execution, so `challenges[0]` on the next line is reached unconditionally.
+        try #require(challenges.count == 1)
         #expect(challenges[0] == testCase.expected)
     }
 }

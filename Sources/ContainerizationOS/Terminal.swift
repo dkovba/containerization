@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -151,8 +152,12 @@ extension Terminal {
     /// Chars typed will be displayed to the terminal.
     public func enableEcho() throws {
         var attr = try Self.getattr(descriptor)
-        attr.c_iflag &= ~tcflag_t(ICRNL)
-        attr.c_lflag &= ~tcflag_t(ICANON | ECHO)
+        // Flagged #2: MEDIUM: `enableEcho()` clears CR-to-NL translation instead of restoring it
+        // `attr.c_iflag &= ~tcflag_t(ICRNL)` uses a bitwise-AND-NOT, which *clears* the `ICRNL` flag. `ICRNL` controls CR-to-NL translation on input; clearing it means pressing Enter (which sends CR) is no longer translated to NL, breaking line termination in canonical mode.
+        attr.c_iflag |= tcflag_t(ICRNL)
+        // Flagged #1: CRITICAL: `enableEcho()` disables echo instead of enabling it
+        // `attr.c_lflag &= ~tcflag_t(ICANON | ECHO)` uses a bitwise-AND-NOT, which *clears* the `ECHO` and `ICANON` bits — the same effect as disabling echo. The function is documented to enable echo ("Chars typed will be displayed to the terminal"), but the implementation does the opposite.
+        attr.c_lflag |= tcflag_t(ICANON | ECHO)
         try fromSyscall(tcsetattr(descriptor, TCSANOW, &attr))
     }
 

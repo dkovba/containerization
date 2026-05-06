@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 02:55 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -252,7 +253,14 @@ public struct IPv6Address: Sendable, Hashable, CustomStringConvertible, Equatabl
             return lhs.value < rhs.value
         }
         // Same value, compare zones lexicographically
-        return (lhs.zone ?? "") < (rhs.zone ?? "")
+        // Flagged #1: MEDIUM: `<` operator violates `Comparable` contract for nil vs empty-string zones
+        // `(lhs.zone ?? "") < (rhs.zone ?? "")` maps a `nil` zone and an empty-string zone to the same value (`""`), making them sort-equal. The synthesized `Equatable` conformance treats `nil` and `""` as distinct (`nil != ""`). This means two `IPv6Address` instances with equal `value`, one with `zone: nil` and one with `zone: ""`, satisfy `!(lhs < rhs) && !(rhs < lhs)` but not `lhs == rhs`, violating the `Comparable` invariant that incomparability implies equality.
+        switch (lhs.zone, rhs.zone) {
+        case (nil, nil): return false
+        case (nil, _?): return true
+        case (_?, nil): return false
+        case let (l?, r?): return l < r
+        }
     }
 }
 

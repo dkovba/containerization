@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -196,13 +197,17 @@ public struct ContainerStatistics: Sendable {
         public var oom: UInt64
         /// Number of processes killed by OOM killer.
         public var oomKill: UInt64
+        // Flagged #1: MEDIUM: `ContainerStatistics.MemoryEventStatistics` missing `oomGroupKill` field, silently dropping OOM group-kill data from the guest; field documentation must use correct semantics
+        // Two related defects: (1) `MemoryEventStatistics` declared fields for `low`, `high`, `max`, `oom`, and `oomKill`, but had no `oomGroupKill` field. The guest agent reports this counter via the protobuf `memoryEvents.oomGroupKill` field, but `Vminitd.swift` never forwarded it: the `MemoryEventStatistics` initialiser call omitted the argument entirely, so the value was unconditionally discarded. (2) Any documentation written for `oomGroupKill` must correctly describe `memory.events:oom_group_kill` — the number of times the entire cgroup was killed as a group by the OOM killer — and not the `memory.events:max` semantics ("Number of times charge for memory failed because of limit"), which describe a completely different, lower-severity event belonging to the `max` field.
+        public var oomGroupKill: UInt64
 
-        public init(low: UInt64, high: UInt64, max: UInt64, oom: UInt64, oomKill: UInt64) {
+        public init(low: UInt64, high: UInt64, max: UInt64, oom: UInt64, oomKill: UInt64, oomGroupKill: UInt64) {
             self.low = low
             self.high = high
             self.max = max
             self.oom = oom
             self.oomKill = oomKill
+            self.oomGroupKill = oomGroupKill
         }
     }
 }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -39,7 +40,9 @@ public struct Hosts: Sendable {
             if !hostnames.isEmpty {
                 line += " " + hostnames.joined(separator: " ")
             }
-            if let comment {
+            // Flagged #1 (1 of 2): LOW: HostsConfiguration emits a malformed comment token when `comment` is set to an empty string
+            // Two `if let comment {` guards checked only for nil; an explicit empty string passed the nil-check and produced malformed /etc/hosts lines with a trailing ` # ` token (no body) or a spurious blank `# ` header line at the top of /etc/hosts.
+            if let comment, !comment.isEmpty {
                 line += " # \(comment) "
             }
             return line
@@ -127,7 +130,8 @@ extension Hosts {
     public var hostsFile: String {
         var lines: [String] = []
 
-        if let comment {
+        // Flagged #1 (2 of 2)
+        if let comment, !comment.isEmpty {
             lines.append("# \(comment)")
         }
 

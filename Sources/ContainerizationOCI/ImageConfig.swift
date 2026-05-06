@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -124,6 +125,24 @@ public struct History: Codable, Sendable {
 /// Image is the JSON structure which describes some basic information about the image.
 /// This provides the `application/vnd.oci.image.config.v1+json` mediatype when marshalled to JSON.
 public struct Image: Codable, Sendable {
+    // Flagged #1: HIGH: `Image.osVersion` and `Image.osFeatures` use wrong JSON keys
+    // `Image` had no `CodingKeys` enum, so Swift's synthesized `Codable`
+    // implementation used the Swift property names `"osVersion"` and `"osFeatures"`
+    // as JSON keys. The OCI image-spec requires these fields to be keyed as
+    // `"os.version"` and `"os.features"` respectively.
+    enum CodingKeys: String, CodingKey {
+        case created
+        case author
+        case architecture
+        case os
+        case osVersion = "os.version"
+        case osFeatures = "os.features"
+        case variant
+        case config
+        case rootfs
+        case history
+    }
+
     /// created is the combined date and time at which the image was created, formatted as defined by RFC 3339, section 5.6.
     public let created: String?
 

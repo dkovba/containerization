@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:00 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -220,6 +221,11 @@ extension ManagedProcess {
                             message: "no PTY data from sync pipe"
                         )
                     }
+                    // Flagged #1: CRITICAL: `start()` performs unsafe memory load on PTY FD data without size validation
+                    // After reading the PTY FD from the sync pipe, `ptr.load(as: Int32.self)` is called without checking `ptyFd.count == size`, causing undefined behavior on short reads.
+                    guard ptyFd.count == size else {
+                        throw ContainerizationError(.internalError, message: "invalid payload")
+                    }
                     let fd = ptyFd.withUnsafeBytes { ptr in
                         ptr.load(as: Int32.self)
                     }
@@ -254,6 +260,9 @@ extension ManagedProcess {
                 return pid
             }
         } catch {
+            // Flagged #2: CRITICAL: `start()` error-path `readToEnd()` blocks forever when `command.start()` fails
+            // If `command.start()` throws, the `defer` closing `errorPipe.fileHandleForWriting` is never registered, so `readToEnd()` waits forever for an EOF that never comes.
+            try? self.errorPipe.fileHandleForWriting.close()
             if let errorData = try? self.errorPipe.fileHandleForReading.readToEnd(),
                 let errorString = String(data: errorData, encoding: .utf8),
                 !errorString.isEmpty

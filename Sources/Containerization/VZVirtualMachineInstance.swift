@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 4 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -135,7 +136,7 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
                     try await agent.enableRosetta()
                 }
             } catch {
-                try await agent.close()
+                try? await agent.close()
                 throw error
             }
 
@@ -151,14 +152,18 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
             // unexpectedly virtualization framework offers you a way to store
             // an error on how it exited. We should report that here instead of the
             // generic vm is not running.
-            guard self.state == .running else {
+            // Flagged #2 (1 of 2): HIGH: Paused containers cannot be stopped — missing `.paused` state handling at every layer
+            guard self.state == .running || self.state == .paused else {
                 throw ContainerizationError(.invalidState, message: "vm is not running")
             }
 
-            try await self.timeSyncer.close()
+            // Flagged #3 (1 of 3): HIGH: VZVirtualMachineInstance performs TimeSyncer operations in wrong order and stop() skips vm.stop() on any prior-step error
+            // stop() called `try await self.timeSyncer.close()` directly before `self.vm.stop()`. If timeSyncer.close() threw, stop() returned the error immediately without proceeding to stop the VM, leaving it running while the caller believed the stop had failed.
+            try? await self.timeSyncer.close()
 
             if self.ownsGroup {
-                try await self.group.shutdownGracefully()
+                // Flagged #3 (2 of 3)
+                try? await self.group.shutdownGracefully()
             }
 
             try await self.vm.stop(queue: self.queue)
@@ -170,8 +175,9 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
 
     func pause() async throws {
         try await lock.withLock { _ in
-            await self.timeSyncer.pause()
+            // Flagged #3 (3 of 3)
             try await self.vm.pause(queue: self.queue)
+            await self.timeSyncer.pause()
         }
     }
 
@@ -231,11 +237,18 @@ extension VZVirtualMachineInstance: VirtualMachineInstance {
         let listener = VZVirtioSocketListener()
         listener.delegate = stream
 
-        try self.vm.listen(
-            queue: queue,
-            port: port,
-            listener: listener
-        )
+        // Flagged #5: MEDIUM: `VZVirtualMachineInstance.listen()` leaks the vsock stream on `vm.listen()` failure
+        // `listen()` created a `VsockListener` stream and registered its delegate, then called `self.vm.listen(...)`. If `vm.listen()` threw, the method propagated the error but never called `stream.finish()`, leaving the stream object allocated with its delegate still registered.
+        do {
+            try self.vm.listen(
+                queue: queue,
+                port: port,
+                listener: listener
+            )
+        } catch {
+            try? stream.finish()
+            throw error
+        }
         return stream
     }
 
@@ -260,6 +273,9 @@ extension VZVirtualMachineInstance {
                 state = .stopping
             case .stopped:
                 state = .stopped
+            // Flagged #2 (2 of 2)
+            case .paused:
+                state = .paused
             default:
                 state = .unknown
             }
@@ -379,6 +395,11 @@ extension VZVirtualMachineInstance.Configuration {
         // Track used virtiofs tags to avoid creating duplicate VZ devices.
         // The same source directory mounted to multiple destinations shares one device.
         var usedVirtioFSTags: Set<String> = []
+        // Flagged #4: HIGH: `VZVirtualMachineInstance.Configuration` does not register the initial filesystem virtiofs tag in `usedVirtioFSTags`, allowing a duplicate device to be created
+        // `usedVirtioFSTags` was populated only by iterating `self.mountsByID`. The initial filesystem (rootfs) is configured separately via `initialFilesystem.configure(config:)`, so its virtiofs tag was never inserted into `usedVirtioFSTags`. If any regular mount in `mountsByID` shared the same source path as the initial filesystem, the per-mount loop would compute the same hash tag and attempt to create a second VirtioFS device with an already-registered tag.
+        if case .virtiofs = initialFilesystem.runtimeOptions {
+            usedVirtioFSTags.insert(try hashMountSource(source: initialFilesystem.source))
+        }
         for (_, mounts) in self.mountsByID {
             for mount in mounts {
                 if case .virtiofs = mount.runtimeOptions {
@@ -438,19 +459,23 @@ extension Kernel {
         // rootfs is always set as ro.
         args.append("ro")
 
-        switch initialFilesystem.type {
-        case "virtiofs":
+        // Flagged #6: MEDIUM: `AttachedFilesystem` and `VZVirtualMachineInstance` kernel command-line builder dispatch on mount type string instead of typed `runtimeOptions`
+        switch initialFilesystem.runtimeOptions {
+        case .virtiofs:
+            // Flagged #1: CRITICAL: `Kernel.linuxCommandline` uses hardcoded `"root=rootfs"` virtiofs tag, which never matches the actual device tag
+            // For a virtiofs root filesystem, the kernel command-line was set to `root=rootfs` (a literal string). However, VirtioFS device tags are computed by `hashMountSource(source:)` — a hash derived from the source path — and the Virtualization framework registers the device under that hash tag, not the string `"rootfs"`. Because the kernel boot argument and the registered device tag never match, the Linux kernel cannot find the root filesystem device.
+            let tag = (try? hashMountSource(source: initialFilesystem.source)) ?? "rootfs"
             args.append(contentsOf: [
                 "rootfstype=virtiofs",
-                "root=rootfs",
+                "root=\(tag)",
             ])
-        case "ext4":
+        case .virtioblk:
             args.append(contentsOf: [
-                "rootfstype=ext4",
+                "rootfstype=\(initialFilesystem.type)",
                 "root=/dev/vda",
             ])
         default:
-            fatalError("unsupported initfs filesystem \(initialFilesystem.type)")
+            fatalError("unsupported initfs filesystem \(initialFilesystem.runtimeOptions)")
         }
 
         if self.commandLine.initArgs.count > 0 {

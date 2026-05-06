@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:26 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -43,6 +44,15 @@ struct PauseCommand: ParsableCommand {
 
         // NOTE: For whatever reason, using signal() for the below causes a swift compiler issue.
         // Can revert whenever that is understood.
+        // Flagged #1: HIGH: Signal sources created without blocking signals first, causing default POSIX handlers to fire
+        // `DispatchSource.makeSignalSource` requires the monitored signal to be blocked via `sigprocmask` before the source is created
+        var mask = sigset_t()
+        sigemptyset(&mask)
+        sigaddset(&mask, SIGINT)
+        sigaddset(&mask, SIGTERM)
+        sigaddset(&mask, SIGCHLD)
+        sigprocmask(SIG_BLOCK, &mask, nil)
+
         let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT)
         sigintSource.setEventHandler {
             log.info("Shutting down, got SIGINT")

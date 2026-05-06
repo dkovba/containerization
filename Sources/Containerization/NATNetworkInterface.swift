@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -32,8 +33,12 @@ public final class NATNetworkInterface: Interface, Sendable {
     public let mtu: UInt32
 
     @available(macOS 26, *)
-    // `reference` isn't used concurrently.
-    public nonisolated(unsafe) let reference: vmnet_network_ref!
+    // Flagged #1 (1 of 2): CRITICAL: `NATNetworkInterface.device()` crashes with a nil dereference when `reference` is unset
+    // `reference` is declared as an implicitly-unwrapped optional (`vmnet_network_ref!`). The deprecated
+    //   `init(ipv4Address:ipv4Gateway:macAddress:)` sets it to `nil`. `device()` passed `self.reference` directly
+    //   to `VZVmnetNetworkDeviceAttachment(network:)`, which force-unwraps it at the call site, crashing when
+    //   `reference` is `nil`.
+    public nonisolated(unsafe) let reference: vmnet_network_ref?
 
     @available(macOS 26, *)
     public init(
@@ -68,6 +73,10 @@ public final class NATNetworkInterface: Interface, Sendable {
 @available(macOS 26, *)
 extension NATNetworkInterface: VZInterface {
     public func device() throws -> VZVirtioNetworkDeviceConfiguration {
+        // Flagged #1 (2 of 2)
+        guard let ref = self.reference else {
+            throw ContainerizationError(.invalidState, message: "NATNetworkInterface has no network reference")
+        }
         let config = VZVirtioNetworkDeviceConfiguration()
         if let macAddress = self.macAddress {
             guard let mac = VZMACAddress(string: macAddress.description) else {
@@ -76,7 +85,7 @@ extension NATNetworkInterface: VZInterface {
             config.macAddress = mac
         }
 
-        config.attachment = VZVmnetNetworkDeviceAttachment(network: self.reference)
+        config.attachment = VZVmnetNetworkDeviceAttachment(network: ref)
         return config
     }
 }

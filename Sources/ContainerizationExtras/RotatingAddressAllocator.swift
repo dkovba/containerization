@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 04:39 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -65,12 +66,16 @@ package final class RotatingAddressAllocator: AddressAllocator {
                 throw AllocatorError.allocatorFull
             }
 
-            let value = state.allocations.removeFirst()
+            // Flagged #1 (1 of 2): HIGH: `allocate()` removes index from pool before validating `indexToAddress`, leaking it on failure
+            // `state.allocations.removeFirst()` is called before `guard let address = state.indexToAddress(Int(value))`. If `indexToAddress` returns `nil`, the index has already been destructively removed from the `allocations` array with no code path to restore it. The slot is permanently lost.
+            let value = state.allocations[0]
 
             guard let address = state.indexToAddress(Int(value)) else {
                 throw AllocatorError.invalidIndex(Int(value))
             }
 
+            // Flagged #1 (2 of 2)
+            state.allocations.removeFirst()
             state.allocationCount += 1
             return address
         }

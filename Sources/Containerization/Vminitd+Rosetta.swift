@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -20,6 +21,9 @@ extension Vminitd {
     /// Enable Rosetta's x86_64 emulation.
     public func enableRosetta() async throws {
         let path = "/run/rosetta"
+        // Flagged #1: HIGH: `Vminitd.enableRosetta()` mounts to `/run/rosetta` without creating the directory first
+        // `enableRosetta()` called `self.mount(...)` with destination `/run/rosetta` without first ensuring the directory existed in the guest. A virtiofs mount to a non-existent path fails immediately in the guest kernel.
+        try await self.mkdir(path: path, all: true, perms: 0o755)
         try await self.mount(
             .init(
                 type: "virtiofs",

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 13:00 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -145,14 +146,23 @@ struct OCISpecTests {
     }
 
     @Test func minimalCapabilitiesDecode() throws {
+        // Flagged #1 (1 of 2): MEDIUM: `minimalCapabilitiesDecode` places `capabilities` at the wrong JSON level, making the test a no-op
+        // The test JSON placed `"capabilities"` as a direct child of the `Spec` object, but `Spec` has no `capabilities` field — that field belongs on `Process`. `JSONDecoder` silently ignores unknown keys, so the capabilities object was never decoded and the test always passed regardless of whether capabilities decoding was broken. The final line `let _ = try JSONDecoder().decode(...)` discarded the result entirely, so no property of the decoded value was ever checked.
         let minCapabilitiesSpec =
             """
                 {
                     "ociVersion": "1.1.0",
-                    "capabilities": {
-                        "permitted": [
-                            "CAP_SYS_ADMIN"
-                        ]
+                    "process": {
+                        "cwd": "/",
+                        "user": {
+                            "uid": 0,
+                            "gid": 0
+                        },
+                        "capabilities": {
+                            "permitted": [
+                                "CAP_SYS_ADMIN"
+                            ]
+                        }
                     },
                     "linux": {}
                 }
@@ -163,6 +173,8 @@ struct OCISpecTests {
             return
         }
 
-        let _ = try JSONDecoder().decode(ContainerizationOCI.Spec.self, from: data)
+        // Flagged #1 (2 of 2)
+        let decodedSpec = try JSONDecoder().decode(ContainerizationOCI.Spec.self, from: data)
+        #expect(decodedSpec.process?.capabilities?.permitted?.contains("CAP_SYS_ADMIN") == true)
     }
 }

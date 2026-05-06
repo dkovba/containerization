@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 11:20 — 0 critical, 0 high, 2 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -39,6 +40,9 @@ struct MACAddressTests {
         func testUInt64InitializerValid(inputValue: UInt64, description: String) {
             let address = MACAddress(inputValue)
             #expect(address.value == inputValue & 0x0000_ffff_ffff_ffff)
+            // Flagged #1: MEDIUM: `testUInt64InitializerValid` never asserts the description
+            // The test function declares a `description: String` parameter that is populated from the argument table but is never referenced in the test body, so the `address.description` property is silently left untested.
+            #expect(address.description == description)
         }
 
         @Test(
@@ -235,14 +239,16 @@ struct MACAddressTests {
         }
 
         @Test("Sendable conformance")
-        func testSendableConformance() {
+        // Flagged #2: MEDIUM: `testSendableConformance` fires an unawaited task
+        // The test creates an unstructured `Task { … }` but never awaits it. The Swift Testing framework returns from the synchronous test function before the task executes, so the `#expect` inside the task never runs.
+        func testSendableConformance() async {
             // This test verifies that MACAddress can be safely passed across concurrency boundaries
             let address = MACAddress(0x0123_4567_89ab)
 
-            Task {
+            await Task {
                 let taskAddress = address
                 #expect(taskAddress.value == 0x0123_4567_89ab)
-            }
+            }.value
         }
     }
 

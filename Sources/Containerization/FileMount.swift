@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -115,7 +116,15 @@ extension FileMountContext {
                 let directoryShare = Mount.share(
                     source: prepared.parentDirectory.path,
                     destination: "/.file-mount-holding",
-                    options: mount.options.filter { $0 != "bind" },
+                    // Flagged #2 (1 of 2): LOW: FileMount constructs bind-mount options with a duplicate "bind" flag
+                    // Mount options were constructed as ["bind"] + prepared.options. If prepared.options already
+                    // contained "bind" (a common case), the resulting slice contained "bind" twice.
+                    // Flagged #1: HIGH: FileMount forwards file-mount options to the intermediate virtiofs directory share, causing share creation to fail
+                    // When transforming a file mount for a single-file bind, FileMountContext created an intermediate
+                    // virtiofs directory share with options: mount.options.filter { $0 != "bind" }. Options such as ro,
+                    // noexec, or nosuid are valid bind-mount flags but are not valid virtiofs share options; passing them
+                    // to Mount.share caused the share to be misconfigured and the subsequent VM disk-attachment step to fail.
+                    options: [],
                     runtimeOptions: runtimeOpts
                 )
                 transformed.append(directoryShare)
@@ -210,7 +219,8 @@ extension FileMountContext {
                 type: "none",
                 source: "\(guestPath)/\(prepared.filename)",
                 destination: prepared.containerDestination,
-                options: ["bind"] + prepared.options
+                // Flagged #2 (2 of 2)
+                options: ["bind"] + prepared.options.filter { $0 != "bind" }
             )
         }
     }

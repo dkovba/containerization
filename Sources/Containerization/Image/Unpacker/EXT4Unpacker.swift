@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 15:34 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -44,13 +45,15 @@ public struct EXT4Unpacker: Unpacker {
             FilePath(cleanedPath),
             minDiskSize: blockSizeInBytes
         )
-        defer { try? filesystem.close() }
 
         try await filesystem.unpack(
             source: archive,
             format: .paxRestricted,
             compression: compression
         )
+        // Flagged fix: call close() explicitly so errors propagate instead of being
+        // silently swallowed by try? in a defer.
+        try filesystem.close()
     }
 
     /// Returns a `Mount` point after unpacking the image into a filesystem.
@@ -73,13 +76,20 @@ public struct EXT4Unpacker: Unpacker {
             ),
             minDiskSize: blockSizeInBytes
         )
-        defer { try? filesystem.close() }
 
         // Resolve layer paths upfront. When progress reporting is enabled and a layer
         // uses zstd, decompress once so both the size-scanning pass and the unpack
         // pass share the same decompressed file.
         var resolvedLayers: [(file: URL, filter: ContainerizationArchive.Filter)] = []
         var decompressedFiles: [URL] = []
+        // Flagged fix: defer must be registered before the loop that populates
+        // decompressedFiles; otherwise a throw inside the loop leaves temp files
+        // untracked and they are never cleaned up.
+        defer {
+            for file in decompressedFiles {
+                ArchiveReader.cleanUpDecompressedZstd(file)
+            }
+        }
         for layer in manifest.layers {
             try Task.checkCancellation()
             let content = try await image.getContent(digest: layer.digest)
@@ -90,11 +100,6 @@ public struct EXT4Unpacker: Unpacker {
                 resolvedLayers.append((file: decompressed, filter: .none))
             } else {
                 resolvedLayers.append((file: content.path, filter: compression))
-            }
-        }
-        defer {
-            for file in decompressedFiles {
-                ArchiveReader.cleanUpDecompressedZstd(file)
             }
         }
 
@@ -129,6 +134,10 @@ public struct EXT4Unpacker: Unpacker {
             )
             try await filesystem.unpack(reader: reader, progress: progress)
         }
+
+        // Flagged fix: call close() explicitly so errors propagate instead of being
+        // silently swallowed by try? in a defer.
+        try filesystem.close()
 
         return .block(
             format: "ext4",

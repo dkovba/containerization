@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 12:41 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -187,8 +188,12 @@ final class RuncProcess: ContainerProcess, Sendable {
 
         try await self.runc.start(id: self.id)
 
+        // Flagged #1: CRITICAL: `start()` overwrites `.exited` state with `.running`, causing `wait()` to hang forever
+        // After `runc.start()` returns, the code unconditionally sets `$0.state = .running(pid: pid)` without checking the current state. There is a window between `runc.start()` returning and the `state.withLock` being acquired during which `setExit()` can be called (e.g., if the container process exits immediately). `setExit()` transitions state from `.creating` to `.exited` and drains the waiters list. The subsequent unconditional assignment then overwrites `.exited` with `.running`, so any future `wait()` call appends a continuation to the waiters list that nobody will ever resume — a permanent hang.
         self.state.withLock {
-            $0.state = .running(pid: pid)
+            if case .creating = $0.state {
+                $0.state = .running(pid: pid)
+            }
         }
 
         self.log.info(

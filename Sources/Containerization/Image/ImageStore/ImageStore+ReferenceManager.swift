@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -49,7 +50,16 @@ extension ImageStore {
 
         private func save(_ state: State) throws {
             let statePath = self.path.appendingPathComponent("state.json")
-            try JSONEncoder().encode(state).write(to: statePath)
+            // Flagged #1: HIGH: Non-atomic write of `state.json` can corrupt image references on crash
+            // `JSONEncoder().encode(state).write(to: statePath)` wrote directly to the target
+            //   file without `.atomic`. A process crash or power loss mid-write produces a truncated
+            //   or partially-overwritten `state.json`, which permanently loses all image references
+            //   tracked in that file.
+            // Flagged #2: HIGH: Non-atomic write of `state.json` corrupts image reference store on crash
+            // `JSONEncoder().encode(state).write(to: statePath)` wrote `state.json` without the
+            //   `.atomic` option. A process crash or power loss mid-write would leave a partially-written
+            //   file, permanently corrupting the image reference store.
+            try JSONEncoder().encode(state).write(to: statePath, options: .atomic)
         }
 
         public func delete(reference: String) throws {

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 13:34 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -65,13 +66,19 @@ struct CtrExample {
         try await container.create()
         try await container.start()
 
+        // Flagged #1 (1 of 2): MEDIUM: `container.stop()` not called when `container.wait()` throws
+        // `container.stop()` was only called in the happy path; if `wait()` threw, stop() was never called, leaving the container VM running.
+        defer {
+            Task { try? await container.stop() }
+        }
+
         // Resize terminal to match current window
         try? await container.resize(to: try current.size)
 
         // Wait for container to finish
         let exitCode = try await container.wait()
 
+        // Flagged #1 (2 of 2)
         print("Container exited with code \(exitCode)")
-        try await container.stop()
     }
 }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 1 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -84,7 +85,9 @@ public enum ArchiveError: Error, CustomStringConvertible {
     }
 }
 
-public struct LibArchiveError: Error {
+// Flagged #1: LOW: `LibArchiveError.description` is silently ignored by Swift's string conversion
+// `LibArchiveError` declares a `description: String` stored property but does not conform to `CustomStringConvertible`. Without the conformance, Swift's string conversion machinery (`String(describing:)`, string interpolation, `print`, logging) ignores the property entirely and falls back to a generic struct representation, discarding the human-readable error message that libarchive provided.
+public struct LibArchiveError: Error, CustomStringConvertible {
     public let source: ArchiveError
     public let description: String
 }

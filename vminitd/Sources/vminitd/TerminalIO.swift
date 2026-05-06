@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 13:08 — 0 bugs
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -92,7 +93,15 @@ final class TerminalIO: ManagedProcess.IO & Sendable {
                 throw POSIXError.fromErrno()
             }
 
-            let term = try Terminal(descriptor: Int32(hostFd), setInitState: false)
+            // Flagged #1: MEDIUM: `attach()` leaks the `hostFd` file descriptor when `Terminal` initialisation throws
+            // `hostFd` (owned by this process after `CZ_pidfd_getfd`) had no close guard on the error path; if `Terminal(descriptor:setInitState:)` throws, the fd leaks.
+            let term: Terminal
+            do {
+                term = try Terminal(descriptor: Int32(hostFd), setInitState: false)
+            } catch {
+                Foundation.close(Int32(hostFd))
+                throw error
+            }
             $0.parent = term
 
             if let stdinSocket = $0.stdinSocket {

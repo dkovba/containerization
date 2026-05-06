@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -86,7 +87,9 @@ extension UnixSocketRelay {
                 // already unlinked if the relay failed earlier.
                 try? FileManager.default.removeItem(at: self.configuration.destination)
             case .into:
-                try $0.listener?.finish()
+                let captured = $0.listener
+                $0.listener = nil
+                try? captured?.finish()
             }
         }
     }
@@ -112,12 +115,18 @@ extension UnixSocketRelay {
             $0.t = Task {
                 do {
                     for try await connection in connectionStream {
-                        try await self.handleHostUnixConn(
-                            hostConn: connection,
-                            port: self.port,
-                            vm: self.vm,
-                            log: self.log
-                        )
+                        // Flagged #1 (1 of 2): HIGH: UnixSocketRelay relay loop terminates after a single connection error, dropping all subsequent connections
+                        // In both relay directions the per-connection handler was called with `try` directly inside the `for … await` loop. Any thrown error escaped the loop body, was caught by the outer `catch`, logged, and caused the task to exit — permanently stopping the relay. Every connection after the first failure was silently dropped. In the `.into` direction this also caused premature `listener.finish()` via the `defer` that was inside the `do` block.
+                        do {
+                            try await self.handleHostUnixConn(
+                                hostConn: connection,
+                                port: self.port,
+                                vm: self.vm,
+                                log: self.log
+                            )
+                        } catch {
+                            self.log?.error("failed to handle connection in unix socket relay loop: \(error)")
+                        }
                     }
                 } catch {
                     log?.error("failed in unix socket relay loop: \(error)")
@@ -144,12 +153,17 @@ extension UnixSocketRelay {
                 do {
                     defer { try? listener.finish() }
                     for await connection in listener {
-                        try await self.handleGuestVsockConn(
-                            vsockConn: connection,
-                            hostConnectionPath: hostPath,
-                            port: self.port,
-                            log: self.log
-                        )
+                        // Flagged #1 (2 of 2)
+                        do {
+                            try await self.handleGuestVsockConn(
+                                vsockConn: connection,
+                                hostConnectionPath: hostPath,
+                                port: self.port,
+                                log: self.log
+                            )
+                        } catch {
+                            self.log?.error("failed to setup relay between vsock \(self.port) and \(hostPath.path): \(error)")
+                        }
                     }
                 } catch {
                     self.log?.error("failed to setup relay between vsock \(self.port) and \(hostPath.path): \(error)")
@@ -179,6 +193,7 @@ extension UnixSocketRelay {
             )
         } catch {
             log?.error("failed to relay between vsock \(port) and \(hostConn)")
+            try? hostConn.close()
             throw error
         }
     }
@@ -202,7 +217,12 @@ extension UnixSocketRelay {
                 "hostFd": "\(hostSocket.fileDescriptor)",
                 "guestFd": "\(vsockConn.fileDescriptor)",
             ])
-        try hostSocket.connect()
+        do {
+            try hostSocket.connect()
+        } catch {
+            try? hostSocket.close()
+            throw error
+        }
 
         do {
             try await self.relay(
@@ -233,5 +253,11 @@ extension UnixSocketRelay {
         }
 
         relay.start()
+        // Flagged #2: MEDIUM: `UnixSocketRelay` completed relays accumulate in `activeRelays` indefinitely
+        // `addRelay` inserted each new relay into `activeRelays` keyed by `relayID` but never removed it after the relay finished. The dictionary accumulated stale completed-relay entries for the lifetime of the `UnixSocketRelay` object.
+        Task { [self] in
+            await relay.waitForCompletion()
+            state.withLock { _ = $0.activeRelays.removeValue(forKey: relayID) }
+        }
     }
 }

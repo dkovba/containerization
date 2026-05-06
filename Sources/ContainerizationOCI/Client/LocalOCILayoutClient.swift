@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 16:16 — 0 critical, 1 high, 1 medium, 0 low (2 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -138,9 +139,27 @@ package final class LocalOCILayoutClient: ContentClient {
                 try fd.write(contentsOf: buffer.readableBytesView)
                 hasher.update(data: buffer.readableBytesView)
             }
+
+            // Flagged #1: HIGH: `push()` stores content without verifying size or digest
+            // `wrote` (cumulative byte count) and `hasher` (SHA256 accumulator) are updated on every loop iteration but neither result is ever consumed — `hasher.finalize()` is never called, and `wrote` is never compared to `descriptor.size`. After the loop completes, `completeIngestSession` is called unconditionally, committing whatever bytes arrived to the content-addressed store under `descriptor.digest` regardless of whether the data matches that digest or has the expected size.
+            let finalDigest = hasher.finalize()
+            guard Int64(wrote) == descriptor.size else {
+                throw ContainerizationError(
+                    .internalError,
+                    message: "size mismatch: expected \(descriptor.size), got \(wrote)")
+            }
+            guard finalDigest.digestString == descriptor.digest else {
+                throw ContainerizationError(
+                    .internalError,
+                    message: "digest mismatch: expected \(descriptor.digest), got \(finalDigest.digestString)")
+            }
+
             try await self.cs.completeIngestSession(id)
         } catch {
             try await self.cs.cancelIngestSession(id)
+            // Flagged #2: MEDIUM: `push()` silently swallows errors on write failure
+            // The `catch` block in `push()` calls `cancelIngestSession(id)` to clean up the in-progress ingest session but never re-throws the caught error. Any failure during streaming or writing (e.g. disk full, I/O error, stream error) is silently discarded and the function returns normally to the caller.
+            throw error
         }
     }
 }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-25 12:07 — 0 critical, 0 high, 0 medium, 1 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -43,8 +44,10 @@ class MockNetlinkSocket: NetlinkSocket {
         }
 
         let response = responses[responseIndex]
+        // Flagged #1: LOW: `recv()` throws wrong error constant on buffer-too-small
+        // `NetlinkSocketError.recvFailure(rc: 75)` uses a raw magic number instead of the `Self.EOVERFLOW` constant defined at the top of the class. The parallel `ENOMEM` path on line 42 correctly uses `Self.ENOMEM`, making this an inconsistency that would silently diverge if the constant value were ever updated.
         guard len >= response.count else {
-            throw NetlinkSocketError.recvFailure(rc: 75)
+            throw NetlinkSocketError.recvFailure(rc: Self.EOVERFLOW)
         }
 
         response.withUnsafeBytes { bytes in

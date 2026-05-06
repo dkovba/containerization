@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 19:11 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2026 Apple Inc. and the Containerization project authors.
 //
@@ -26,4 +27,13 @@ public struct RegistryInfo: Sendable {
     public let modifiedDate: Date
     /// The date the registry was created.
     public let createdDate: Date
+
+    // Flagged #1: HIGH: `RegistryInfo` is unconstructible outside the module
+    // `RegistryInfo` is a `public struct` with no explicit `public init`. Swift only synthesizes an `internal` memberwise initializer for public structs, so no code outside the `ContainerizationOS` module can create a `RegistryInfo` value.
+    public init(hostname: String, username: String, modifiedDate: Date, createdDate: Date) {
+        self.hostname = hostname
+        self.username = username
+        self.modifiedDate = modifiedDate
+        self.createdDate = createdDate
+    }
 }

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 20:45 — 1 critical, 0 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -66,10 +67,12 @@ public struct UnixType: SocketType, Sendable, CustomStringConvertible {
         let socketName = path
         let nameLength = socketName.utf8.count
 
+        // Flagged #1: CRITICAL: `init(path:perms:unlinkExisting:)` stack buffer overflow on macOS for long socket paths
+        // The macOS branch sets `let lengthLimit = 253`, but `sockaddr_un.sun_path` is only `char[104]` on macOS. The subsequent `strncpy(ptr, $0, nameLength)` writes up to 252 bytes into a 104-byte stack buffer, overflowing into adjacent stack memory and causing undefined behaviour.
         #if os(macOS)
         // Funnily enough, this isn't limited by sun path on macOS even though
         // it's stated as so.
-        let lengthLimit = 253
+        let lengthLimit = MemoryLayout.size(ofValue: addr.sun_path)
         #elseif os(Linux)
         let lengthLimit = MemoryLayout.size(ofValue: addr.sun_path)
         #endif

@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 3 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -250,7 +251,9 @@ public struct ContainerManager: Sendable {
             size: rootfsSizeInBytes,
             progress: progress
         )
-        if readOnly {
+        // Flagged #3: MEDIUM: ContainerManager does not mark rootfs read-only when a writable overlay layer is present
+        // The "ro" mount option was only appended to the rootfs when readOnly == true. When a writable overlay layer is created (writableLayerSizeInBytes != nil), the base rootfs must also be read-only so that all writes go to the overlay; without this, writes bypass the overlay and mutate the base image directly.
+        if readOnly || writableLayerSizeInBytes != nil {
             rootfs.options.append("ro")
         }
 
@@ -311,6 +314,13 @@ public struct ContainerManager: Sendable {
                     )
                 }
                 config.dns = .init(nameservers: [gateway.description])
+            // Flagged #1: HIGH: `Network.createInterface` protocol allowed `nil` return, enabling silent network-allocation failure
+            // The `Network` protocol declared `createInterface(_:) throws -> Interface?`. A conforming implementation could return `nil` without throwing, and the caller in `ContainerManager` used `if let interface = try self.network?.createInterface(id)` — so a `nil` return silently skipped attaching a network interface even when `networking == true` was explicitly requested.
+            } else if networking, self.network != nil {
+                throw ContainerizationError(
+                    .invalidState,
+                    message: "network interface allocation returned nil for container \(id)"
+                )
             }
             config.bootLog = BootLog.file(path: self.containerRoot.appendingPathComponent(id).appendingPathComponent("bootlog.log"))
             try configuration(&config)
@@ -327,7 +337,9 @@ public struct ContainerManager: Sendable {
     /// Releases network resources and removes all files for a container.
     /// - Parameter id: The container ID.
     public mutating func delete(_ id: String) throws {
-        try self.releaseNetwork(id)
+        // Flagged #2: HIGH: `ContainerManager.delete` has two sequential error-handling defects: skipping `removeItem` and masking the `releaseNetwork` error
+        // Two sequential defects in the same method: (1) `delete()` called `try self.releaseNetwork(id)` before `FileManager.default.removeItem(at: path)`. If `releaseNetwork` threw, the function propagated the error immediately and never removed the container directory. (2) After saving the `releaseNetwork` error into a local `firstError` via `do/catch`, `delete()` still called `try FileManager.default.removeItem(at: path)` with a bare `try`. If `removeItem` threw, its error propagated immediately, bypassing the `if let err = firstError { throw err }` check and silently discarding the previously saved network-release error.
+        try? self.releaseNetwork(id)
         let path = containerRoot.appendingPathComponent(id)
         try FileManager.default.removeItem(at: path)
     }

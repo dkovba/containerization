@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 19:07 — 0 critical, 1 high, 0 medium, 0 low (1 total)
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -201,11 +202,12 @@ public struct KeychainQuery {
     /// - Returns: `true` if the entry exists, `false` otherwise.
     /// - Throws: An error if the keychain query fails.
     public func exists(securityDomain: String, accessGroup: String? = nil, hostname: String) throws -> Bool {
+        // Flagged #1: HIGH: `exists()` always throws due to `kSecReturnAttributes: true` with a `nil` result pointer
+        // `kSecReturnAttributes as String: true` is set in the query dictionary passed to `SecItemCopyMatching`, but `nil` is passed as the result pointer. Apple's Security framework requires that the result parameter must not be `NULL` when any `kSecReturn*` key is `true`; violating this contract causes `SecItemCopyMatching` to return `errSecParam`, which `isQuerySuccessful` then surfaces as a thrown error.
         var query: [String: Any] = [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrSecurityDomain as String: securityDomain,
             kSecAttrServer as String: hostname,
-            kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: false,
         ]

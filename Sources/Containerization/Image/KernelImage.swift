@@ -1,3 +1,4 @@
+// fix-bugs: 2026-04-24 11:29 — 2 total
 //===----------------------------------------------------------------------===//
 // Copyright © 2025-2026 Apple Inc. and the Containerization project authors.
 //
@@ -59,11 +60,21 @@ extension KernelImage {
             for kernel in binaries {
                 var result = try writer.create(from: kernel.path)
                 let platform = kernel.platform.ociPlatform()
+                // Flagged #1: LOW: `KernelImage.create` sets `platform` on layer descriptors
+                // The layer descriptor passed `platform: platform` to `Descriptor(...)`. Per the OCI
+                //   image spec, the `platform` field belongs on manifest descriptors within an index, not
+                //   on layer descriptors within a manifest. Including it on a layer descriptor produces a
+                //   non-conformant OCI image that may confuse container runtimes or registry tooling when
+                //   inspecting or pulling kernel images.
+                // Flagged #2: LOW: `KernelImage` attaches a `platform` field to a layer descriptor
+                // The `Descriptor` for the kernel image layer was constructed with `platform: platform`.
+                //   Per the OCI image spec, `platform` is only valid on manifest-index entries; layer
+                //   descriptors must not carry it. Strict OCI registry clients or validation tools reject
+                //   such descriptors.
                 let layerDescriptor = Descriptor(
                     mediaType: mediaType,
                     digest: result.digest.digestString,
-                    size: result.size,
-                    platform: platform)
+                    size: result.size)
                 let rootfsConfig = ContainerizationOCI.Rootfs(type: "layers", diffIDs: [result.digest.digestString])
                 let runtimeConfig = ContainerizationOCI.ImageConfig(labels: labels)
                 let imageConfig = ContainerizationOCI.Image(architecture: platform.architecture, os: platform.os, config: runtimeConfig, rootfs: rootfsConfig)
