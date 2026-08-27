@@ -56,6 +56,26 @@ public final class ArchiveReader {
     let fileHandle: FileHandle?
     /// Temporary decompressed file URL if the input was zstd-compressed
     private var tempDecompressedFile: URL?
+    private var streamFailure: ArchiveError?
+
+    private func recordStreamFailure(_ code: some BinaryInteger) {
+        guard streamFailure == nil else {
+            return
+        }
+        let description = archive_error_string(underlying).map(String.init(cString:))
+        streamFailure = .failedToExtractArchive(description ?? "archive read failed with code \(code)")
+    }
+
+    private func readNextHeader(into entry: WriteEntry) -> Bool {
+        let result = archive_read_next_header2(underlying, entry.underlying)
+        if result == ARCHIVE_OK || result == ARCHIVE_WARN {
+            return true
+        }
+        if result != ARCHIVE_EOF {
+            recordStreamFailure(result)
+        }
+        return false
+    }
 
     /// Initializes an `ArchiveReader` to read from a specified file URL with an explicit `Format` and `Filter`.
     /// Note: This method must be used when it is known that the archive at the specified URL follows the specified
@@ -197,8 +217,7 @@ extension ArchiveReader: Sequence {
 
         public mutating func next() -> (WriteEntry, Data)? {
             let entry = WriteEntry()
-            let result = archive_read_next_header2(reader.underlying, entry.underlying)
-            guard result == ARCHIVE_OK || result == ARCHIVE_WARN else {
+            guard reader.readNextHeader(into: entry) else {
                 return nil
             }
             let data = reader.readDataForEntry(entry)
@@ -211,6 +230,12 @@ extension ArchiveReader: Sequence {
         StreamingIterator(reader: self)
     }
 
+    public func throwIfStreamFailed() throws {
+        if let streamFailure {
+            throw streamFailure
+        }
+    }
+
     public struct StreamingIterator: Sequence, IteratorProtocol {
         var reader: ArchiveReader
 
@@ -220,8 +245,7 @@ extension ArchiveReader: Sequence {
 
         public mutating func next() -> (WriteEntry, ArchiveEntryReader)? {
             let entry = WriteEntry()
-            let result = archive_read_next_header2(reader.underlying, entry.underlying)
-            guard result == ARCHIVE_OK || result == ARCHIVE_WARN else {
+            guard reader.readNextHeader(into: entry) else {
                 return nil
             }
             let streamReader = ArchiveEntryReader(reader: reader)
@@ -240,7 +264,12 @@ extension ArchiveReader: Sequence {
                 }
                 return archive_read_data(self.underlying, baseAddress, buffer.count)
             }
-            guard c > 0 else { break }
+            guard c > 0 else {
+                if c < 0 {
+                    recordStreamFailure(c)
+                }
+                break
+            }
             part.count = c
             entry.append(part)
         }
@@ -302,6 +331,7 @@ extension ArchiveReader {
                 rejectedPaths.append(memberPath.string)
             }
         }
+        try throwIfStreamFailed()
         guard foundEntry else {
             throw ArchiveError.failedToExtractArchive("no entries found in archive")
         }
@@ -316,19 +346,17 @@ extension ArchiveReader {
     /// reopen the archive.
     public func extractFile(path: String) throws -> (WriteEntry, Data) {
         let entry = WriteEntry()
-        while true {
-            let result = archive_read_next_header2(self.underlying, entry.underlying)
-            guard result == ARCHIVE_OK || result == ARCHIVE_WARN else {
-                break
-            }
+        while readNextHeader(into: entry) {
             guard let entryPath = entry.path else { continue }
             let trimCharSet = CharacterSet(charactersIn: "./")
             let trimmedEntry = entryPath.trimmingCharacters(in: trimCharSet)
             let trimmedRequired = path.trimmingCharacters(in: trimCharSet)
             guard trimmedEntry == trimmedRequired else { continue }
             let data = readDataForEntry(entry)
+            try throwIfStreamFailed()
             return (entry, data)
         }
+        try throwIfStreamFailed()
         throw ArchiveError.failedToExtractArchive(" \(path) not found in archive")
     }
 
