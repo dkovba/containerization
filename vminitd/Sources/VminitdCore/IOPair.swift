@@ -29,7 +29,7 @@ final class IOPair: Sendable {
     private struct IO {
         let from: IOCloser
         let to: IOCloser
-        let buffer: UnsafeMutableBufferPointer<UInt8>
+        var buffer: [UInt8]
         var closed = false
         var closing = false
         var readFinished = false
@@ -50,11 +50,9 @@ final class IOPair: Sendable {
 
             while true {
                 if self.bufferedBytes > 0 {
-                    let view = UnsafeMutableBufferPointer(
-                        start: self.buffer.baseAddress?.advanced(by: self.writeOffset),
-                        count: self.bufferedBytes
-                    )
-                    let result = writeTo.write(view)
+                    let start = self.writeOffset
+                    let end = start + self.bufferedBytes
+                    let result = writeTo.write(self.buffer.span.extracting(start..<end))
                     self.writeOffset += result.wrote
                     self.bufferedBytes -= result.wrote
                     switch result.action {
@@ -82,7 +80,8 @@ final class IOPair: Sendable {
                     return
                 }
 
-                let result = readFrom.read(self.buffer)
+                var readSpan = self.buffer.mutableSpan
+                let result = readFrom.read(&readSpan)
                 self.bufferedBytes = result.read
                 self.writeOffset = 0
                 switch result.action {
@@ -135,7 +134,6 @@ final class IOPair: Sendable {
             } catch {
                 logger?.error("failed to close writer fd for IOPair: \(error)")
             }
-            self.buffer.deallocate()
             self.closed = true
         }
     }
@@ -146,7 +144,7 @@ final class IOPair: Sendable {
         reason: String,
         logger: Logger? = nil
     ) {
-        let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: Int(getpagesize()))
+        let buffer = [UInt8](repeating: 0, count: Int(getpagesize()))
         self.io = Mutex(IO(from: readFrom, to: writeTo, buffer: buffer))
         self.reason = reason
         self.logger = logger
