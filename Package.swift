@@ -314,7 +314,8 @@ let package = Package(
                 .product(name: "SystemPackage", package: "swift-system"),
                 "LCShim",
             ],
-            path: "vminitd/Sources/Cgroup"
+            path: "vminitd/Sources/Cgroup",
+            swiftSettings: [.strictMemorySafety()]
         ),
         .target(
             name: "VminitdCore",
@@ -333,14 +334,16 @@ let package = Package(
                 "LCShim",
                 "Cgroup",
             ],
-            path: "vminitd/Sources/VminitdCore"
+            path: "vminitd/Sources/VminitdCore",
+            swiftSettings: [.strictMemorySafety()]
         ),
         .testTarget(
             name: "VminitdCoreTests",
             dependencies: [
                 "VminitdCore",
                 .product(name: "Logging", package: "swift-log"),
-            ]
+            ],
+            swiftSettings: [.strictMemorySafety()]
         ),
     ]
 )
